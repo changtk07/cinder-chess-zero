@@ -10,7 +10,7 @@ use burn::{
         RmsNormConfig,
     },
     tensor::{
-        activation::{gelu, softmax, tanh},
+        activation::{gelu, softmax},
         backend::Backend,
         Int, TensorData,
     },
@@ -185,7 +185,9 @@ impl PolicyHeadConfig {
 }
 
 /// Reduces each square to a few features and reads the value from all of them together, as
-/// Leela's transformer networks do, so the head knows which square each feature came from.
+/// Leela's transformer networks do, so the head knows which square each feature came from. The
+/// value is a win, draw and loss probability for the side to move, also as Leela predicts, so a
+/// surely drawn position and an unclear one look different.
 #[derive(Module, Debug)]
 struct ValueHead<B: Backend> {
     square_ff: Linear<B>,
@@ -194,14 +196,13 @@ struct ValueHead<B: Backend> {
 }
 
 impl<B: Backend> ValueHead<B> {
-    // [batch_size * 64, d_model] -> [batch_size, 1]
+    // [batch_size * 64, d_model] -> win, draw and loss logits, [batch_size, 3]
     fn forward(&self, input: Tensor<B, 2>, batch_size: usize) -> Tensor<B, 2> {
         let x = gelu(self.square_ff.forward(input));
         let d_square = x.dims()[1];
         let x = x.reshape([batch_size, 64 * d_square]);
         let x = gelu(self.ff1.forward(x));
-        let x = self.ff2.forward(x);
-        tanh(x)
+        self.ff2.forward(x)
     }
 }
 
@@ -221,7 +222,7 @@ impl ValueHeadConfig {
         ValueHead {
             square_ff: LinearConfig::new(self.d_model, self.d_square).init(device),
             ff1: LinearConfig::new(64 * self.d_square, self.d_hidden).init(device),
-            ff2: LinearConfig::new(self.d_hidden, 1).init(device),
+            ff2: LinearConfig::new(self.d_hidden, 3).init(device),
         }
     }
 }
@@ -241,12 +242,14 @@ pub(crate) struct TransformerModel<B: Backend> {
 /// and the value for the side to move.
 pub(crate) struct Evaluation {
     pub(crate) priors: Vec<f32>,
+    /// The expected score in [-1, 1]: the win probability minus the loss probability
     pub(crate) value: f32,
 }
 
 impl<B: Backend> TransformerModel<B> {
-    /// Returns legal-move logits, [batch_size, max legal moves], and values, [batch_size, 1].
-    /// Logits past a position's own move count are padding.
+    /// Returns legal-move logits, [batch_size, max legal moves], and the value's win, draw and
+    /// loss logits for the side to move, [batch_size, 3]. Logits past a position's own move count
+    /// are padding.
     pub(crate) fn forward(&self, input: NetworkInput<B>) -> (Tensor<B, 2>, Tensor<B, 2>) {
         let attn_input = self.embedding.forward(input.pieces, input.state_features);
         let [batch_size, seq_len, d_model] = attn_input.dims();
@@ -280,14 +283,14 @@ impl<B: Backend> TransformerModel<B> {
     ) -> Vec<Evaluation> {
         let (logits, value) = self.forward(NetworkInput::new(states, moves, device));
         let width = logits.dims()[1];
-        let output = Tensor::cat(vec![softmax(logits, 1), value], 1);
+        let output = Tensor::cat(vec![softmax(logits, 1), softmax(value, 1)], 1);
         let data = output.into_data().convert::<f32>().to_vec::<f32>().unwrap();
 
-        data.chunks_exact(width + 1)
+        data.chunks_exact(width + 3)
             .zip(moves)
             .map(|(row, moves)| Evaluation {
                 priors: row[..moves.as_ref().len()].to_vec(),
-                value: row[width],
+                value: row[width] - row[width + 2],
             })
             .collect()
     }
@@ -417,6 +420,23 @@ mod tests {
     }
 
     // The positions have 20, 48 and 6 legal moves, so the shorter rows are padded
+    #[test]
+    fn values_are_the_win_probability_minus_the_loss_probability() {
+        let model = tiny_model();
+        let device = Default::default();
+        let states: Vec<State> = FENS.iter().map(|fen| State::from_fen(fen)).collect();
+        let states: Vec<&State> = states.iter().collect();
+        let moves: Vec<_> = states.iter().map(|state| state.generate_moves()).collect();
+
+        let (_, value) = model.forward(NetworkInput::new(&states, &moves, &device));
+        let probabilities = softmax(value, 1).into_data().to_vec::<f32>().unwrap();
+        let evaluations = model.evaluate(&states, &moves, &device);
+
+        for (wdl, evaluation) in probabilities.chunks_exact(3).zip(&evaluations) {
+            assert!((evaluation.value - (wdl[0] - wdl[2])).abs() < 1e-6);
+        }
+    }
+
     #[test]
     fn batched_evaluation_matches_single_positions() {
         let model = tiny_model();

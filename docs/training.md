@@ -21,7 +21,7 @@ Settings: the run defaults with 8 blocks of width 256. Each generation played 51
 | 8 | 109 | 127 | 276 | 198 | 2.481 | 1.956 | 0.134 | 0.339 |
 | 9 | 124 | 115 | 273 | 195 | 2.485 | 1.959 | 0.135 | 0.342 |
 
-Each line is one generation's own games and the training that followed them. The draw baseline is the value loss of always predicting a draw over the training window.
+Each line is one generation's own games and the training that followed them. The value head then gave a single score, trained by squared error, and the draw baseline is the value loss of always predicting a draw over the training window. Runs now predict win, draw and loss probabilities, with a cross-entropy value loss and the results' entropy as its baseline, so their value losses don't compare with these.
 
 Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 35 wins, 84 draws (12 at the ply limit) and 9 losses, a score of 0.602 or +72 Elo. Equal networks would split 44 decisive games about 22 to 22, give or take 3, so 35 to 9 is far outside chance.
 
@@ -43,6 +43,5 @@ A checkpoint with its optimizer state took 52 MB, a reference network 18 MB, and
 
 ### To settle before a long run
 
-- **The value head.** A single score in [−1, 1] predicts 0 both for positions that are surely drawn and for unclear ones, and half the games are draws. Win, draw and loss probabilities, as Leela predicts, would separate the two. It changes the network, so it has to come before a long run.
 - **The learning rate and training steps.** The policy loss stays about 0.5 above the targets' entropy, so the network may be underfitting what the searches teach. Training is about 5% of each generation, so more steps per generation, or a schedule, costs little.
 - **Cheaper data.** Self-play is nearly all of the time. Reusing the search tree between moves, and fewer simulations for most moves (playout cap randomization, as in KataGo), would both multiply games per hour.

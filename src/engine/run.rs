@@ -336,9 +336,9 @@ struct GenerationSummary {
     generation: usize,
     games: GameCounts,
     losses: Losses,
-    /// The value loss of always predicting a draw: the share of the window's positions from
-    /// decisive games
-    draw_value_loss: f32,
+    /// The entropy of the window's results: the value loss of predicting the same win, draw and
+    /// loss shares for every position, which the network has to beat by telling positions apart
+    result_entropy: f32,
     /// The trained network's score against the one it was trained from
     eval: Option<MatchScore>,
 }
@@ -428,16 +428,26 @@ fn train_generation<T: AutodiffBackend>(
     }
 
     run.save_checkpoint(&trainer, generation + 1)?;
-    let draw_value_loss = samples
+    let result_entropy = [1, 0, -1]
+        .map(|result| {
+            let share = samples
+                .iter()
+                .filter(|sample| sample.result == result)
+                .count() as f32
+                / samples.len() as f32;
+            if share > 0.0 {
+                -share * share.ln()
+            } else {
+                0.0
+            }
+        })
         .iter()
-        .map(|sample| (sample.result as f32).powi(2))
-        .sum::<f32>()
-        / samples.len() as f32;
+        .sum();
     Ok(GenerationSummary {
         generation,
         games,
         losses: Losses::mean(&losses),
-        draw_value_loss,
+        result_entropy,
         eval: None,
     })
 }
@@ -544,7 +554,7 @@ fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
         writeln!(
             file,
             "generation,games,white_wins,black_wins,draws,average_plies,\
-             policy_loss,target_entropy,value_loss,draw_value_loss,\
+             policy_loss,target_entropy,value_loss,result_entropy,\
              eval_wins,eval_draws,eval_losses,eval_elo"
         )?;
     }
@@ -553,7 +563,7 @@ fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
         generation,
         games,
         losses,
-        draw_value_loss,
+        result_entropy,
         eval,
     } = summary;
     let average_plies = games.plies as f64 / games.total().max(1) as f64;
@@ -568,7 +578,7 @@ fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
     });
     writeln!(
         file,
-        "{generation},{},{},{},{},{average_plies:.1},{:.4},{:.4},{:.4},{draw_value_loss:.4},{eval}",
+        "{generation},{},{},{},{},{average_plies:.1},{:.4},{:.4},{:.4},{result_entropy:.4},{eval}",
         games.total(),
         games.white_wins,
         games.black_wins,
@@ -580,7 +590,7 @@ fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
 
     println!(
         "Generation {generation} done: {} white wins, {} black wins, {} draws, {average_plies:.0} \
-         plies on average; {}, always predicting a draw would score {draw_value_loss:.3}",
+         plies on average; {}, results' entropy {result_entropy:.3}",
         games.white_wins,
         games.black_wins,
         games.draws,

@@ -32,7 +32,7 @@ pub(crate) struct Losses {
     pub(crate) policy: f32,
     /// The visit distributions' own entropy, the least the policy loss can be
     pub(crate) target_entropy: f32,
-    /// Mean squared error of the values against the results
+    /// Cross-entropy of the win, draw and loss probabilities against the results
     pub(crate) value: f32,
 }
 
@@ -74,7 +74,7 @@ impl<B: AutodiffBackend> Trainer<B> {
 
         // The padding's logits are -1e9 and its targets 0, so it adds nothing to either
         let policy_loss = -(log_softmax(logits, 1) * policy_target).sum_dim(1).mean();
-        let value_loss = (value - value_target).powf_scalar(2.0).mean();
+        let value_loss = -(log_softmax(value, 1) * value_target).sum_dim(1).mean();
 
         let loss = policy_loss.clone() + value_loss.clone();
         let gradients = GradientsParams::from_grads(loss.backward(), &self.model);
@@ -164,8 +164,8 @@ fn optimizer_config(weight_decay: f32) -> AdamWConfig {
 }
 
 // The network input for a batch, the visit distribution over each position's moves (padded with
-// zeros like the moves), each game's result for the side to move, and the distributions' mean
-// entropy
+// zeros like the moves), each game's result for the side to move as a one-hot win, draw or loss,
+// and the distributions' mean entropy
 fn encode_batch<B: Backend>(
     batch: &[&Sample],
     device: &B::Device,
@@ -193,12 +193,15 @@ fn encode_batch<B: Backend>(
             }
         }
     }
-    let values: Vec<f32> = batch.iter().map(|sample| sample.result as f32).collect();
+    let values: Vec<f32> = batch
+        .iter()
+        .flat_map(|sample| [1, 0, -1].map(|result| (sample.result == result) as u8 as f32))
+        .collect();
 
     (
         input,
         Tensor::from_data(TensorData::new(policy, [batch.len(), width]), device),
-        Tensor::from_data(TensorData::new(values, [batch.len(), 1]), device),
+        Tensor::from_data(TensorData::new(values, [batch.len(), 3]), device),
         entropy / batch.len() as f32,
     )
 }
@@ -257,7 +260,11 @@ mod tests {
             assert!(row[sample.visits.len()..].iter().all(|&p| p == 0.0));
             assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         }
-        assert_eq!(floats(value), [1.0, -1.0, 0.0, 1.0]);
+        // Results 1, -1, 0 and 1, as win, draw and loss
+        assert_eq!(
+            floats(value),
+            [1., 0., 0., 0., 0., 1., 0., 1., 0., 1., 0., 0.]
+        );
     }
 
     #[test]

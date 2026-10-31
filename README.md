@@ -18,7 +18,7 @@ cargo test                       # move generation, game outcome, search and sel
 
 With `--out data/selfplay.bin`, each finished game's training samples are appended to that file: one per move played, with the position, every legal move's visit count from its search, and the game's result for the side to move. Games stopped at the ply limit count as draws. The format is described in `src/engine/samples.rs`.
 
-`train` plays and trains generation after generation in a run directory, creating it on first use. Each generation's network plays `--games` games (512) at `--sims` simulations per move (200), then trains for `--steps` steps (1,000) of 256 positions drawn from the last four generations' games, and becomes the next generation. Stop it at any point and run the same command again, on this machine or another, to continue: the directory holds everything the run needs, and costs at most the games in progress and the current generation's training. Copy or sync the whole directory to move a run between machines. `--parallel` (512) and `--backend` can differ per machine; the rest of the settings are fixed when the run is created, in its `config.json`. Training always runs in f32, whatever precision self-play uses. `history.csv` gets a line per generation with its games' results and the training losses; the value loss is worth comparing with `draw_value_loss`, what always predicting a draw would score. A run keeps the networks of generation 0 and every tenth generation (`keep_every`), without their optimizer state, so `cinder match runs/first 30 20 --backend cuda-bf16` measures progress between them. Setting `eval_games` makes each new network also play the one it was trained from after training, with the result in `history.csv`; it's off by default, since early networks draw nearly all those games.
+`train` plays and trains generation after generation in a run directory, creating it on first use. Each generation's network plays `--games` games (512) at `--sims` simulations per move (200), then trains for `--steps` steps (1,000) of 256 positions drawn from the last four generations' games, and becomes the next generation. Stop it at any point and run the same command again, on this machine or another, to continue: the directory holds everything the run needs, and costs at most the games in progress and the current generation's training. Copy or sync the whole directory to move a run between machines. `--parallel` (512) and `--backend` can differ per machine; the rest of the settings are fixed when the run is created, in its `config.json`. Training always runs in f32, whatever precision self-play uses. `history.csv` gets a line per generation with its games' results and the training losses; the value loss is worth comparing with `result_entropy`, what predicting the same win, draw and loss shares for every position would score. A run keeps the networks of generation 0 and every tenth generation (`keep_every`), without their optimizer state, so `cinder match runs/first 30 20 --backend cuda-bf16` measures progress between them. Setting `eval_games` makes each new network also play the one it was trained from after training, with the result in `history.csv`; it's off by default, since early networks draw nearly all those games.
 
 Commands run on the CPU by default. Add `--backend cuda` to run on an NVIDIA GPU, or `cuda-f16` / `cuda-bf16` for half precision, e.g. `cargo run --release -- bench 4096 --backend cuda-f16`. The first run on a GPU spends a minute or more compiling kernels.
 
@@ -47,7 +47,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 - 8 pre-norm transformer blocks: 4 heads, model width 256, RMSNorm, GELU. A final RMSNorm normalizes the residual stream before the heads.
 - The blocks keep every position's tokens in one 2D matrix, which burn multiplies faster than the 3D form, and attention projects queries, keys and values with a single matrix multiply.
 - Policy head: 73 move planes per square, 4,672 moves in total, using the AlphaZero encoding in `src/engine/encoding.rs`. Only the legal moves' logits are gathered on the device, so the softmax and the data read back cover just those moves.
-- Value head: reduces each square to 32 features, then reads all 64 squares' features together through a 128-unit layer to a tanh score in [−1, 1] for the side to move, as Leela's transformer networks do.
+- Value head: reduces each square to 32 features, then reads all 64 squares' features together through a 128-unit layer to win, draw and loss probabilities for the side to move, as Leela's transformer networks do. The search uses the win probability minus the loss probability, a score in [−1, 1].
 
 **Search** (`src/engine/mcts.rs`)
 
@@ -64,7 +64,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 
 **Training** (`src/engine/run.rs`, `src/engine/training.rs`)
 
-- Each generation's network plays its games, then trains on positions drawn at random from the latest generations' games. The policy learns each search's visit distribution, by cross-entropy, and the value each game's result, by squared error, with AdamW and gradient clipping.
+- Each generation's network plays its games, then trains on positions drawn at random from the latest generations' games. The policy learns each search's visit distribution, by cross-entropy, and the value each game's result as a win, draw or loss, also by cross-entropy, with AdamW and gradient clipping.
 - Self-play keeps every slot busy across generations: games still going when a generation has finished its share wait while the network trains, and the next generation's network finishes them. Without that, the batch would shrink as the last games finish, and burn recompiles its kernels for every new batch size.
 - Checkpoints store the weights and optimizer state at full precision, so a run continues on any backend. Every file is written so that the process can be stopped at any point.
 
@@ -85,7 +85,8 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 - [ ] Training:
   - [x] A training loop alternating self-play and training, with runs that stop at any point and continue on either machine.
   - [x] A throwaway run on the laptop: the network learns, and generation 10 beat generation 0 by 35 wins to 9, with 84 draws. Results and findings in [docs/training.md](docs/training.md).
-  - [ ] Before a long run: choose the value head (a single score, or win, draw and loss probabilities) and the learning rate and training steps, as `docs/training.md` explains.
+  - [x] Win, draw and loss probabilities from the value head instead of a single score, so a surely drawn position and an unclear one look different.
+  - [ ] Before a long run: choose the learning rate and training steps, as `docs/training.md` explains.
   - [x] Matches between a run's networks with `cinder match`, against references kept every ten generations, or each generation against the one before.
 - [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws.
 - [ ] UCI interface:
