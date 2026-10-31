@@ -86,7 +86,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
   - [x] A training loop alternating self-play and training, with runs that stop at any point and continue on either machine.
   - [x] A throwaway run on the laptop: the network learns, and generation 10 beat generation 0 by 35 wins to 9, with 84 draws. Results and findings in [docs/training.md](docs/training.md).
   - [x] Win, draw and loss probabilities from the value head instead of a single score, so a surely drawn position and an unclear one look different.
-  - [ ] Before a long run: choose the learning rate and training steps, as `docs/training.md` explains.
+  - [x] Learning rate and training steps: three runs on the desktop found neither 3× the steps nor a 3× higher learning rate better than the defaults of 3e-4 and 1,000 steps ([docs/training.md](docs/training.md)).
   - [x] Matches between a run's networks with `cinder match`, against references kept every ten generations, or each generation against the one before.
 - [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws.
 - [ ] UCI interface:

@@ -41,7 +41,54 @@ At full power a generation took about 20–25 minutes, almost all of it self-pla
 
 A checkpoint with its optimizer state took 52 MB, a reference network 18 MB, and each generation's samples about 12 MB.
 
+## Learning rate and training steps, on the desktop
+
+Run from 2026-11-01 at `5243abd`, on the RTX 4090, after the value head changed to win, draw and loss probabilities. Three runs in `runs/lr-trials`, outside git, all at the defaults of 8 blocks of width 256 and 512 games of 200 simulations per generation, with the same seed, so they started from the same weights and played the same generation 0 games. They differed only in training:
+
+| run | learning rate | steps per generation | time for 10 generations |
+|---|---|---|---|
+| a | 3e-4 | 1,000 | 310 minutes |
+| b | 3e-4 | 3,000 | 330 minutes |
+| c | 1e-3 | 1,000 | 295 minutes |
+
+The three ran side by side on the one GPU, so their times are each about three times what a run alone takes.
+
+The last generation's training, with the value loss as a share of the results' entropy, and the policy loss above the targets' entropy:
+
+| run | value loss | results' entropy | share | policy loss above entropy |
+|---|---|---|---|---|
+| a | 0.318 | 0.792 | 40% | 0.54 |
+| b | 0.165 | 0.856 | 19% | 0.58 |
+| c | 0.377 | 0.788 | 48% | 0.51 |
+
+These were about the same from generation 2 on.
+
+Generation 10 against generation 0, 128 games at 50 simulations per move without root noise:
+
+| run | wins | draws | losses | score | Elo |
+|---|---|---|---|---|---|
+| a | 24 | 97 | 7 | 0.566 | +46 |
+| b | 44 | 77 | 7 | 0.645 | +103 |
+| c | 35 | 90 | 3 | 0.625 | +89 |
+
+The generation 10 networks against each other, 256 games per pair, in a scratch run holding copies of their checkpoints:
+
+| pair | first's wins | draws | losses | score | decisive games from an even split |
+|---|---|---|---|---|---|
+| a against b | 55 | 157 | 44 | 0.521 | +1.1 standard deviations |
+| a against c | 56 | 159 | 41 | 0.529 | +1.5 |
+| b against c | 50 | 160 | 46 | 0.508 | +0.4 |
+
+### Findings
+
+- **Neither more steps nor a higher learning rate made a stronger network in ten generations.** Head to head, no pair differs significantly. Run a, the defaults, won both of its pairings narrowly: 111 to 85 in decisive games against the other two together, 1.9 standard deviations from an even split.
+- **Matches against generation 0 disagree with the matches between the runs.** Run b scored best against generation 0 and run a worst, yet run a did at least as well as both head to head. With 30 to 50 decisive games in 128, scores against a weak opponent are too noisy to rank similar networks; compare them directly instead.
+- **Three times the steps cut the value loss in half without stronger play.** Run b saw each position in its window about three times as often, so its lower value loss is mostly a closer fit to positions it trained on.
+- **The policy loss stays about 0.5 above the targets' entropy whatever the training.** More steps or a higher learning rate didn't close it, so it isn't underfitting. A 200-simulation search's visit counts carry noise no network can predict, which likely accounts for most of it.
+- **With the new value head, run a scored 0.566 against generation 0**, against 0.602 for the throwaway run with the same settings and the old head. The difference is under one standard deviation.
+
+So the defaults stay: a learning rate of 3e-4 and 1,000 steps per generation, the cheapest of the three. A learning rate schedule is worth a look once a long run's losses and match results flatten.
+
 ### To settle before a long run
 
-- **The learning rate and training steps.** The policy loss stays about 0.5 above the targets' entropy, so the network may be underfitting what the searches teach. Training is about 5% of each generation, so more steps per generation, or a schedule, costs little.
 - **Cheaper data.** Self-play is nearly all of the time. Reusing the search tree between moves, and fewer simulations for most moves (playout cap randomization, as in KataGo), would both multiply games per hour.
