@@ -126,3 +126,21 @@ Each against their common generation 0, 128 games at 50 simulations per move wit
 - **Against generation 0 the two agree with the head-to-head**, this time: pcr scored 0.766 to base's 0.645.
 
 So runs now default to it, with a quarter of moves in full and 2,048 games per generation as in this trial. A share or fast search size other than 0.25 and 50 is untested.
+
+## The long run
+
+Started on 2026-11-02 at 01:18 at `83821f7`, on the RTX 5080 laptop, as `runs/long` with the run defaults: 8 blocks of width 256; 2,048 games per generation with a quarter of moves searched at 200 simulations and the rest at 50; 1,000 training steps of 256 positions per generation from the last four generations; 512 games at once in bf16. It syncs to `gdrive:cinder-runs/long` (`--sync gdrive:cinder-runs`), so either machine can continue it.
+
+A generation takes about 20 minutes on the laptop at full power: 18.5 minutes of self-play at about 26,400 simulations per second, 1 minute 45 seconds of training, and a push to Google Drive of about 40 seconds that training doesn't wait for. The laptop dropped to its 33 W cap a few times while unattended.
+
+| generation | white wins | black wins | draws | plies | policy loss | targets' entropy | value loss | results' entropy |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 714 | 727 | 607 | 152 | 3.117 | 2.956 | 0.747 | 1.060 |
+| 1 | 276 | 283 | 1,489 | 227 | 2.909 | 2.592 | 0.468 | 0.820 |
+| 2 | 448 | 404 | 1,196 | 186 | 2.857 | 2.526 | 0.473 | 0.796 |
+| 4 | 437 | 422 | 1,189 | 184 | 2.728 | 2.361 | 0.517 | 0.708 |
+| 6 | 421 | 431 | 1,196 | 167 | 2.695 | 2.347 | 0.584 | 0.800 |
+| 8 | 433 | 444 | 1,171 | 159 | 2.691 | 2.317 | 0.575 | 0.824 |
+| 10 | 467 | 463 | 1,118 | 154 | 2.665 | 2.264 | 0.568 | 0.846 |
+
+Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 61 wins, 65 draws (11 at the ply limit) and 2 losses, a score of 0.730 or +173 Elo, close to the playout cap trial's +206 for its generation 8. Against an untrained network the score will soon saturate, so later references play the one before: generation 20 against 10, and so on.
