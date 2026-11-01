@@ -142,5 +142,17 @@ A generation takes about 20 minutes on the laptop at full power: 18.5 minutes of
 | 6 | 421 | 431 | 1,196 | 167 | 2.695 | 2.347 | 0.584 | 0.800 |
 | 8 | 433 | 444 | 1,171 | 159 | 2.691 | 2.317 | 0.575 | 0.824 |
 | 10 | 467 | 463 | 1,118 | 154 | 2.665 | 2.264 | 0.568 | 0.846 |
+| 12 | 497 | 489 | 1,062 | 154 | 2.632 | 2.211 | 0.577 | 0.894 |
+| 14 | 506 | 417 | 1,125 | 157 | 2.619 | 2.186 | 0.565 | 0.906 |
+| 16 | 508 | 448 | 1,092 | 159 | 2.610 | 2.165 | 0.535 | 0.869 |
+| 18 | 477 | 454 | 1,117 | 162 | 2.601 | 2.141 | 0.521 | 0.846 |
+| 19 | 504 | 449 | 1,095 | 158 | 2.598 | 2.137 | 0.535 | 0.864 |
 
-Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 61 wins, 65 draws (11 at the ply limit) and 2 losses, a score of 0.730 or +173 Elo, close to the playout cap trial's +206 for its generation 8. Against an untrained network the score will soon saturate, so later references play the one before: generation 20 against 10, and so on.
+Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 61 wins, 65 draws (11 at the ply limit) and 2 losses, a score of 0.730 or +173 Elo, close to the playout cap trial's +206 for its generation 8. Against an untrained network the score will soon saturate, so later references play the one before.
+
+| match | games | wins | draws | losses | score | Elo | decisive games from an even split |
+|---|---|---|---|---|---|---|---|
+| 10 against 0 | 128 | 61 | 65 | 2 | 0.730 | +173 | +10.4 standard deviations |
+| 20 against 10 | 256 | 68 | 160 | 28 | 0.578 | +55 | +4.1 |
+
+All at 50 simulations per move without root noise. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly and white won a little more often than black.
