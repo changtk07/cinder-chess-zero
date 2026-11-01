@@ -26,7 +26,7 @@ struct UndoRecord {
     hash: u64,
 }
 
-pub struct State {
+pub(crate) struct State {
     pub(crate) board: Board,
     pub(crate) turn: Color,
     /// The square a pawn just passed with a double push, if a pawn of the side to move attacks it.
@@ -40,11 +40,11 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::from_fen(START_FEN)
     }
 
-    pub fn from_fen(fen: &str) -> Self {
+    pub(crate) fn from_fen(fen: &str) -> Self {
         let parts: ArrayVec<&str, 6> = fen.split_whitespace().collect();
         let mut state = Self {
             board: Board::from_fen(parts[0]),
@@ -63,7 +63,7 @@ impl State {
         state
     }
 
-    pub fn to_fen(&self) -> String {
+    pub(crate) fn to_fen(&self) -> String {
         let turn = match self.turn {
             Color::White => 'w',
             Color::Black => 'b',
@@ -87,7 +87,7 @@ impl State {
     // Move Making
     // ------------------------------------------------------------------------
 
-    pub fn make_move(&mut self, mv: Move) {
+    pub(crate) fn make_move(&mut self, mv: Move) {
         let (from, to, move_type) = mv.unpack();
         let (moved, captured) = self.board.move_piece(from, to);
 
@@ -136,7 +136,7 @@ impl State {
         self.hash ^= RAND_CASTLING[self.castling_rights];
     }
 
-    pub fn unmake_move(&mut self) {
+    pub(crate) fn unmake_move(&mut self) {
         let Some(history) = self.history.pop() else {
             return;
         };
@@ -241,7 +241,7 @@ impl State {
     // Move Generation
     // ------------------------------------------------------------------------
 
-    pub fn generate_moves(&self) -> ArrayVec<Move, 218> {
+    pub(crate) fn generate_moves(&self) -> ArrayVec<Move, 218> {
         let mut moves = ArrayVec::<Move, 218>::new();
         let masks = self.board.move_gen_masks(self.turn);
 
@@ -249,20 +249,22 @@ impl State {
             self.board.pieces[Piece::pawn(self.turn)]
                 .for_each(|position| self.generate_pawn_moves(position, &masks, &mut moves));
             let occupancy = self.board.occupancy;
-            let pieces: [(Piece, fn(Position, Bitmask) -> Bitmask); 4] = [
-                (Piece::knight(self.turn), |p, _| {
-                    Bitmask::KNIGHT_ATTACK_MASKS[p]
-                }),
-                (Piece::bishop(self.turn), Bitmask::bishop_attack_mask),
-                (Piece::rook(self.turn), Bitmask::rook_attack_mask),
-                (Piece::queen(self.turn), Bitmask::queen_attack_mask),
-            ];
-            for (piece, attack_mask) in pieces {
-                self.board.pieces[piece].for_each(|position| {
-                    let targets = attack_mask(position, occupancy);
-                    self.generate_piece_moves(position, targets, &masks, &mut moves)
-                });
-            }
+            self.board.pieces[Piece::knight(self.turn)].for_each(|position| {
+                let attack_mask = Bitmask::KNIGHT_ATTACK_MASKS[position];
+                self.generate_piece_moves(position, attack_mask, &masks, &mut moves)
+            });
+            self.board.pieces[Piece::bishop(self.turn)].for_each(|position| {
+                let attack_mask = Bitmask::bishop_attack_mask(position, occupancy);
+                self.generate_piece_moves(position, attack_mask, &masks, &mut moves)
+            });
+            self.board.pieces[Piece::rook(self.turn)].for_each(|position| {
+                let attack_mask = Bitmask::rook_attack_mask(position, occupancy);
+                self.generate_piece_moves(position, attack_mask, &masks, &mut moves)
+            });
+            self.board.pieces[Piece::queen(self.turn)].for_each(|position| {
+                let attack_mask = Bitmask::queen_attack_mask(position, occupancy);
+                self.generate_piece_moves(position, attack_mask, &masks, &mut moves)
+            });
         }
 
         self.board.pieces[Piece::king(self.turn)]
@@ -477,7 +479,7 @@ impl State {
     // Performance Testing
     // ------------------------------------------------------------------------
 
-    pub fn perft(&mut self, depth: u8) -> u64 {
+    pub(crate) fn perft(&mut self, depth: u8) -> u64 {
         if depth == 0 {
             return 1;
         }
@@ -494,7 +496,7 @@ impl State {
         nodes
     }
 
-    pub fn divide(&mut self, depth: u8) {
+    pub(crate) fn divide(&mut self, depth: u8) {
         if depth == 0 {
             return;
         }

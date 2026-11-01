@@ -432,7 +432,7 @@ mod tests {
         let probabilities = softmax(value, 1).into_data().to_vec::<f32>().unwrap();
         let evaluations = model.evaluate(&states, &moves, &device);
 
-        for (wdl, evaluation) in probabilities.chunks_exact(3).zip(&evaluations) {
+        for (wdl, evaluation) in probabilities.as_chunks::<3>().0.iter().zip(&evaluations) {
             assert!((evaluation.value - (wdl[0] - wdl[2])).abs() < 1e-6);
         }
     }

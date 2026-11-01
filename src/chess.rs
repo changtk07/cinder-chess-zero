@@ -6,4 +6,4 @@ pub(crate) mod state;
 pub(crate) mod types;
 
 pub(crate) use state::Outcome;
-pub use state::State;
+pub(crate) use state::State;
