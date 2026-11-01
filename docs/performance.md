@@ -9,7 +9,7 @@ Self-play evaluates about 43,000 positions a second on the 4090 with the default
 - WSL2 running Arch Linux, i7-13700KF (24 threads), 15 GB RAM visible to WSL, RTX 4090 24 GB, Windows driver 621.01.
 - Also a laptop: WSL2 running Arch Linux, 16 threads, 31 GB RAM visible to WSL, RTX 5080 Laptop GPU 16 GB (power limit up to 130 W), the same driver and CUDA 13.4. It runs the network at roughly half the 4090's speed, so compare measurements within one machine only.
 - The wgpu backend finds no Vulkan adapter under WSL2, so the GPU path is CUDA.
-- burn's CUDA backend compiles kernels at runtime with NVRTC, which comes with the CUDA toolkit. Here that's CUDA 13.4 from `pacman -S cuda`, installed to `/opt/cuda`.
+- burn's CUDA backend compiles kernels at runtime with NVRTC, which comes with the CUDA toolkit. Here that's CUDA 13.4 from `pacman -S cuda`, installed to `/opt/cuda`, which the package's `/etc/profile.d/cuda.sh` exports as `CUDA_PATH`.
 - cudarc 0.18, which burn 0.20 pins, rejects toolkits newer than CUDA 13.1. `.cargo/config.toml` sets `CUDARC_CUDA_VERSION=13010` so it builds against its 13.1 bindings, which work with 13.4.
 - Every command takes `--backend cpu|cuda|cuda-f16|cuda-bf16`. The default is `cpu`.
 
@@ -45,7 +45,7 @@ Measured on 2026-10-25 on the 4090, with the network then of 8 blocks of width 3
 | 1,024 | – | 8,077 | 13,276 | **16,224** |
 | 4,096 | – | 9,114 | 13,429 | 13,782 |
 
-Largest difference from the CPU, for the same weights, in policy or value (the GPU tests in `model.rs`): f32 6e-5, f16 5e-4, bf16 3e-3.
+Largest difference from the CPU, for the same weights, in policy or value (the GPU tests in `model.rs`, whose tolerances are about 10× these): f32 6e-5, f16 5e-4, bf16 3e-3.
 
 ### Self-play
 

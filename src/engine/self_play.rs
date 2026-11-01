@@ -305,7 +305,7 @@ impl SelfPlay {
     /// finished game with its training samples, and `on_progress` is called every few seconds with
     /// the stats of this call. Games stopped at the ply limit count as draws.
     ///
-    /// The tree work runs on one thread. It takes about 2% of each step, and a thread pool measured
+    /// The tree work runs on one thread. It's a small share of each step, and a thread pool measured
     /// slower overall: dispatching thousands of microsecond tasks costs more than it saves, and
     /// even the network calls got slower, likely from idle workers competing with the thread
     /// driving the GPU.

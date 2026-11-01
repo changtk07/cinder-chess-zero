@@ -1,6 +1,6 @@
 #!/bin/bash
-# Self-play throughput for each network size and number of games at once, to compare a machine
-# with the tables in docs/performance.md. Builds first, then plays each combination until its
+# Self-play throughput for each network size and number of games at once, to choose a network size
+# and --parallel for the machine it runs on. Builds first, then plays each combination until its
 # kernels are compiled and tuned, and averages the next REPORTS 5-second reports.
 #
 # A machine's first run of each shape autotunes its kernels, which can stall self-play for minutes;
@@ -14,7 +14,6 @@
 # Check nothing else is using the GPU first: other load skews every number.
 
 cd "$(dirname "$0")/.." || exit 1
-export CUDA_PATH=${CUDA_PATH:-/opt/cuda}
 
 sizes=("$@")
 [ ${#sizes[@]} -eq 0 ] && sizes=(6x256 8x256 10x256 12x256 8x384)
