@@ -249,6 +249,24 @@ pub(crate) enum Direction {
     SouthWest = 7,
 }
 
+impl Direction {
+    pub(crate) const STRAIGHT: [Self; 4] = [Self::North, Self::South, Self::East, Self::West];
+    pub(crate) const DIAGONAL: [Self; 4] = [
+        Self::NorthEast,
+        Self::NorthWest,
+        Self::SouthEast,
+        Self::SouthWest,
+    ];
+
+    /// Whether squares further along the direction have higher indices
+    pub(crate) const fn ascends(self) -> bool {
+        matches!(
+            self,
+            Self::North | Self::East | Self::NorthEast | Self::NorthWest
+        )
+    }
+}
+
 impl<T> Index<Direction> for [T; 8] {
     type Output = T;
     #[inline]

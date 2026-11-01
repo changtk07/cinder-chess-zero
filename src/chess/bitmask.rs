@@ -217,88 +217,41 @@ impl Bitmask {
         Position(63 - self.0.leading_zeros() as u8)
     }
 
+    /// Of squares along `direction` from some origin, the one nearest the origin.
+    pub(crate) const fn nearest(self, direction: Direction) -> Position {
+        if direction.ascends() {
+            self.lsb()
+        } else {
+            self.msb()
+        }
+    }
+
+    // The squares a slider on `position` attacks along `direction`: the ray up to and including
+    // the first occupied square
+    fn ray_attack_mask(position: Position, direction: Direction, occupancy: Self) -> Self {
+        let ray = Self::RAYS[direction][position];
+        let blockers = ray & occupancy;
+        if blockers == Self::EMPTY {
+            ray
+        } else {
+            ray ^ Self::RAYS[direction][blockers.nearest(direction)]
+        }
+    }
+
     pub(crate) fn rook_attack_mask(position: Position, occupancy: Self) -> Self {
-        let mut mask = Self::EMPTY;
-
-        // North (Index 0) - Positive direction, blocker is LSB
-        let north = Self::RAYS[Direction::North][position];
-        let north_blockers = north & occupancy;
-        mask |= if north_blockers.0 != 0 {
-            north ^ Self::RAYS[Direction::North][north_blockers.lsb()]
-        } else {
-            north
-        };
-
-        // South (Index 1) - Negative direction, blocker is MSB
-        let south = Self::RAYS[Direction::South][position];
-        let south_blockers = south & occupancy;
-        mask |= if south_blockers.0 != 0 {
-            south ^ Self::RAYS[Direction::South][south_blockers.msb()]
-        } else {
-            south
-        };
-
-        // East (Index 2) - Positive direction, blocker is LSB
-        let east = Self::RAYS[Direction::East][position];
-        let east_blockers = east & occupancy;
-        mask |= if east_blockers.0 != 0 {
-            east ^ Self::RAYS[Direction::East][east_blockers.lsb()]
-        } else {
-            east
-        };
-
-        // West (Index 3) - Negative direction, blocker is MSB
-        let west = Self::RAYS[Direction::West][position];
-        let west_blockers = west & occupancy;
-        mask |= if west_blockers.0 != 0 {
-            west ^ Self::RAYS[Direction::West][west_blockers.msb()]
-        } else {
-            west
-        };
-
-        mask
+        Direction::STRAIGHT
+            .iter()
+            .fold(Self::EMPTY, |mask, &direction| {
+                mask | Self::ray_attack_mask(position, direction, occupancy)
+            })
     }
 
     pub(crate) fn bishop_attack_mask(position: Position, occupancy: Self) -> Self {
-        let mut mask = Self::EMPTY;
-
-        // North East (Index 4) - Positive direction, blocker is LSB
-        let north_east = Self::RAYS[Direction::NorthEast][position];
-        let north_east_blockers = north_east & occupancy;
-        mask |= if north_east_blockers.0 != 0 {
-            north_east ^ Self::RAYS[Direction::NorthEast][north_east_blockers.lsb()]
-        } else {
-            north_east
-        };
-
-        // North West (Index 5) - Positive direction, blocker is LSB
-        let north_west = Self::RAYS[Direction::NorthWest][position];
-        let north_west_blockers = north_west & occupancy;
-        mask |= if north_west_blockers.0 != 0 {
-            north_west ^ Self::RAYS[Direction::NorthWest][north_west_blockers.lsb()]
-        } else {
-            north_west
-        };
-
-        // South East (Index 6) - Negative direction, blocker is MSB
-        let south_east = Self::RAYS[Direction::SouthEast][position];
-        let south_east_blockers = south_east & occupancy;
-        mask |= if south_east_blockers.0 != 0 {
-            south_east ^ Self::RAYS[Direction::SouthEast][south_east_blockers.msb()]
-        } else {
-            south_east
-        };
-
-        // South West (Index 7) - Negative direction, blocker is MSB
-        let south_west = Self::RAYS[Direction::SouthWest][position];
-        let south_west_blockers = south_west & occupancy;
-        mask |= if south_west_blockers.0 != 0 {
-            south_west ^ Self::RAYS[Direction::SouthWest][south_west_blockers.msb()]
-        } else {
-            south_west
-        };
-
-        mask
+        Direction::DIAGONAL
+            .iter()
+            .fold(Self::EMPTY, |mask, &direction| {
+                mask | Self::ray_attack_mask(position, direction, occupancy)
+            })
     }
 
     pub(crate) fn queen_attack_mask(position: Position, occupancy: Self) -> Self {

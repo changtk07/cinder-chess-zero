@@ -377,23 +377,13 @@ impl State {
 
         let occupancy_after = self.board.occupancy & !(attacker.mask() | captured.mask());
 
-        let west_attackers = Bitmask::RAYS[Direction::West][king_pos] & opponent_sliders;
-        if west_attackers != Bitmask::EMPTY {
-            let between = Bitmask::BETWEEN_MASKS[west_attackers.msb()][king_pos];
-            if between & occupancy_after == Bitmask::EMPTY {
-                return false;
-            }
-        }
-
-        let east_attackers = Bitmask::RAYS[Direction::East][king_pos] & opponent_sliders;
-        if east_attackers != Bitmask::EMPTY {
-            let between = Bitmask::BETWEEN_MASKS[east_attackers.lsb()][king_pos];
-            if between & occupancy_after == Bitmask::EMPTY {
-                return false;
-            }
-        }
-
-        true
+        // Capturing takes both pawns off the king's rank, which could expose it to a rook or queen
+        [Direction::West, Direction::East].iter().all(|&direction| {
+            let attackers = Bitmask::RAYS[direction][king_pos] & opponent_sliders;
+            attackers == Bitmask::EMPTY
+                || Bitmask::BETWEEN_MASKS[attackers.nearest(direction)][king_pos] & occupancy_after
+                    != Bitmask::EMPTY
+        })
     }
 
     // ------------------------------------------------------------------------

@@ -239,26 +239,16 @@ impl Board {
         let opponent_diagonal_slider =
             self.pieces[Piece::bishop(opponent)] | self.pieces[Piece::queen(opponent)];
 
-        for (direction, sliders, is_positive_ray) in [
-            (Direction::North, opponent_straight_slider, true),
-            (Direction::South, opponent_straight_slider, false),
-            (Direction::East, opponent_straight_slider, true),
-            (Direction::West, opponent_straight_slider, false),
-            (Direction::NorthEast, opponent_diagonal_slider, true),
-            (Direction::NorthWest, opponent_diagonal_slider, true),
-            (Direction::SouthEast, opponent_diagonal_slider, false),
-            (Direction::SouthWest, opponent_diagonal_slider, false),
-        ] {
+        let rays = (Direction::STRAIGHT.map(|direction| (direction, opponent_straight_slider)))
+            .into_iter()
+            .chain(Direction::DIAGONAL.map(|direction| (direction, opponent_diagonal_slider)));
+        for (direction, sliders) in rays {
             let attack_mask = Bitmask::RAYS[direction][king_position] & sliders;
             if attack_mask == Bitmask::EMPTY {
                 continue;
             }
 
-            let attacker_position = if is_positive_ray {
-                attack_mask.lsb()
-            } else {
-                attack_mask.msb()
-            };
+            let attacker_position = attack_mask.nearest(direction);
 
             let between_mask = Bitmask::BETWEEN_MASKS[attacker_position][king_position];
             let blocker_mask = between_mask & self.occupancy;
