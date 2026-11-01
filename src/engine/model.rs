@@ -34,8 +34,7 @@ impl<B: Backend> ChessEmbedding<B> {
         let encoded_pieces = self.e_piece.forward(pieces);
         let encoded_squares = self.e_pos.forward(squares);
         // Castling rights, en passant file and the halfmove clock go into every square's token
-        // rather than a token of their own: attention over 64 tokens runs about a third faster
-        // than over 65
+        // rather than a token of their own: attention over 64 tokens runs much faster than over 65
         let encoded_state = self.e_state.forward(state_features).unsqueeze_dim(1);
 
         encoded_pieces + encoded_squares + encoded_state
@@ -562,7 +561,7 @@ mod tests {
         assert!(max_diff(&value, &cpu_value) < tolerance);
     }
 
-    // Tolerances are about 10x the differences measured on an RTX 4090
+    // Tolerances are about 10x the largest differences measured
     #[test]
     #[ignore = "requires a CUDA GPU"]
     fn cuda_matches_cpu() {

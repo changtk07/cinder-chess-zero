@@ -26,7 +26,7 @@ The CUDA backend needs the CUDA 13 toolkit, for its runtime compiler NVRTC. `.ca
 cargo test --release -- --ignored
 ```
 
-burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the GPU path is CUDA.
+burn's wgpu backend isn't enabled, so the GPU path is CUDA.
 
 ## How it works
 
@@ -69,26 +69,26 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 
 ## Roadmap
 
-- [x] Batched leaf evaluation on a GPU backend: see [docs/performance.md](docs/performance.md)
+- [x] Batched leaf evaluation on a GPU backend
 - [x] Self-play data: Dirichlet noise at the root, and recording (position, visit distribution, result) samples
 - [x] Network changes before any weights are trained: inputs encoded apart from the network in `src/engine/encoding.rs`, the board seen from the side to move, a final RMSNorm before the heads, and attention dropout off
 - [ ] Faster network, now about 95% of self-play time:
-  - [x] 2D linear layers and a fused query/key/value projection: self-play about 1.7× faster on the laptop.
-  - [x] 64 tokens instead of 65: about 25% faster again at the current size, more at smaller ones.
-  - [x] A default network size for both the RTX 4090 desktop and the RTX 5080 laptop: 8 blocks of width 256, with 512 games at once on both. Self-play runs about 1.35× as fast as 8 × 384 on the desktop and 2× on the laptop (`docs/performance.md`, "Network size").
+  - [x] 2D linear layers and a fused query/key/value projection.
+  - [x] 64 tokens instead of 65.
+  - [x] A default network size, chosen from self-play speed across sizes: 8 blocks of width 256, with 512 games at once.
   - Maybe: attention's matrix multiplies, a thousand or more tiny products per call, still run far below the GPU's speed.
 - [x] Reuse the search tree between moves:
-  - [x] Measure how many of each search's visits the chosen move's subtree holds: 36% with a network trained for ten generations, so reuse would play about 1.57× the games per hour (`docs/performance.md`, "Tree reuse").
+  - [x] Measure how many of each search's visits the chosen move's subtree holds: 36% with a network trained for ten generations, so reuse saves about that share of evaluations.
   - [x] Self-play reuses the subtree, with fresh noise mixed into the reused root's priors, and `--sims` counts the root's total visits, so samples keep recording the same number of visits.
-  - [x] Self-play finishes games about 1.55–1.8× as fast with reuse (`docs/performance.md`, "Tree reuse").
-  - Maybe: cache evaluations by position and halfmove clock. 11–16% of evaluations repeat a position from the same game, 15–22% one from any game, so self-play would run about 1.1–1.25× as fast, at up to about 2 GB of memory unless the cache is bounded (`docs/performance.md`, "Evaluation cache").
+  - [x] Self-play finishes games about 1.6× as fast with reuse.
+  - Maybe: cache evaluations by position and halfmove clock. 11–16% of evaluations repeat a position from the same game, 15–22% one from any game, so self-play would run about 1.1–1.25× as fast, at up to about 2 GB of memory unless the cache is bounded.
 - [ ] Training:
   - [x] A training loop alternating self-play and training, with runs that stop at any point and continue on either machine.
-  - [x] A throwaway run on the laptop: the network learns, and generation 10 beat generation 0 by 35 wins to 9, with 84 draws. Results and findings in [docs/training.md](docs/training.md).
+  - [x] A throwaway run: the network learns, and generation 10 beat generation 0 by 35 wins to 9, with 84 draws.
   - [x] Win, draw and loss probabilities from the value head instead of a single score, so a surely drawn position and an unclear one look different.
-  - [x] Learning rate and training steps: three runs on the desktop found neither 3× the steps nor a 3× higher learning rate better than the defaults of 3e-4 and 1,000 steps ([docs/training.md](docs/training.md)).
+  - [x] Learning rate and training steps: three trial runs found neither 3× the steps nor a 3× higher learning rate better than the defaults of 3e-4 and 1,000 steps.
   - [x] Matches between a run's networks with `cinder match`, against references kept every ten generations, or each generation against the one before.
-  - [ ] Playout cap randomization (`full_search_share` and `fast_sims` in a run's `config.json`): a trial against full searches for the same GPU time is running ([docs/training.md](docs/training.md)).
+  - [ ] Playout cap randomization (`full_search_share` and `fast_sims` in a run's `config.json`): a trial against full searches for the same GPU time is running.
   - [ ] A long run.
 - [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws.
 - [ ] UCI interface:
