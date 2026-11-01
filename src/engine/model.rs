@@ -44,7 +44,6 @@ impl<B: Backend> ChessEmbedding<B> {
 
 #[derive(Config, Debug)]
 struct ChessEmbeddingConfig {
-    #[config(default = 384)]
     d_model: usize,
 }
 
@@ -123,13 +122,9 @@ impl<B: Backend> AttentionBlock<B> {
 
 #[derive(Config, Debug)]
 struct AttentionBlockConfig {
-    #[config(default = 6)]
     n_heads: usize,
-    #[config(default = 384)]
     d_model: usize,
-    #[config(default = 768)]
     d_ff: usize,
-    #[config(default = 0.0)]
     attention_dropout: f64,
 }
 
@@ -172,7 +167,6 @@ impl<B: Backend> PolicyHead<B> {
 
 #[derive(Config, Debug)]
 struct PolicyHeadConfig {
-    #[config(default = 384)]
     d_model: usize,
 }
 
@@ -208,7 +202,6 @@ impl<B: Backend> ValueHead<B> {
 
 #[derive(Config, Debug)]
 struct ValueHeadConfig {
-    #[config(default = 384)]
     d_model: usize,
     /// Features kept per square
     #[config(default = 32)]
@@ -345,22 +338,16 @@ impl TransformerModelConfig {
         let d_ff = (self.d_ff_scale * d_model as f64) as usize;
 
         TransformerModel {
-            embedding: ChessEmbeddingConfig::new()
-                .with_d_model(d_model)
-                .init(device),
+            embedding: ChessEmbeddingConfig::new(d_model).init(device),
             attention_blocks: (0..self.n_blocks)
                 .map(|_| {
-                    AttentionBlockConfig::new()
-                        .with_n_heads(self.n_heads)
-                        .with_d_model(d_model)
-                        .with_d_ff(d_ff)
-                        .with_attention_dropout(self.attention_dropout)
+                    AttentionBlockConfig::new(self.n_heads, d_model, d_ff, self.attention_dropout)
                         .init(device)
                 })
                 .collect(),
             final_norm: RmsNormConfig::new(d_model).init(device),
-            policy_head: PolicyHeadConfig::new().with_d_model(d_model).init(device),
-            value_head: ValueHeadConfig::new().with_d_model(d_model).init(device),
+            policy_head: PolicyHeadConfig::new(d_model).init(device),
+            value_head: ValueHeadConfig::new(d_model).init(device),
         }
     }
 }
