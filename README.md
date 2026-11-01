@@ -79,11 +79,11 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
   - [x] 64 tokens instead of 65: about 25% faster again at the current size, more at smaller ones.
   - [x] A default network size for both the RTX 4090 desktop and the RTX 5080 laptop: 8 blocks of width 256, with 512 games at once on both. Self-play runs about 1.35× as fast as 8 × 384 on the desktop and 2× on the laptop (`docs/performance.md`, "Network size").
   - Maybe: attention's matrix multiplies, a thousand or more tiny products per call, still run far below the GPU's speed.
-- [ ] Reuse the search tree between moves:
+- [x] Reuse the search tree between moves:
   - [x] Measure how many of each search's visits the chosen move's subtree holds: 36% with a network trained for ten generations, so reuse would play about 1.57× the games per hour (`docs/performance.md`, "Tree reuse").
   - [x] Self-play reuses the subtree, with fresh noise mixed into the reused root's priors, and `--sims` counts the root's total visits, so samples keep recording the same number of visits.
-  - [ ] Measure the games per hour with reuse on an idle GPU, against 454 games in the first 10 minutes without it (`docs/performance.md`, "Tree reuse").
-  - Caching evaluations by Zobrist hash and halfmove clock is an alternative or a complement.
+  - [x] Self-play finishes games about 1.55–1.8× as fast with reuse (`docs/performance.md`, "Tree reuse").
+  - Maybe: cache evaluations by Zobrist hash and halfmove clock, for positions reached again by other move orders.
 - [ ] Training:
   - [x] A training loop alternating self-play and training, with runs that stop at any point and continue on either machine.
   - [x] A throwaway run on the laptop: the network learns, and generation 10 beat generation 0 by 35 wins to 9, with 84 draws. Results and findings in [docs/training.md](docs/training.md).

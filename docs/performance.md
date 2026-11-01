@@ -147,7 +147,17 @@ How much of each search a reused tree would carry over: the visits under the mov
 
 If a search topped the reused root up to its simulation count rather than adding a full count of new simulations, it would need about 36% fewer evaluations, about 1.57× the games per hour. Sampled plies reuse less, since they sometimes play a move the search rated lower. A stronger network concentrates its searches more, so the share likely grows with training.
 
-Self-play now reuses the subtree this way. The baseline to compare it with: the same network and settings without reuse finished 454 games in the first 10 minutes, at about 42,000 evaluations per second. A run with reuse on 2026-11-01 ran while a game used the GPU and evaluated about 15× slower, so it doesn't count; the comparison still needs an idle GPU.
+Self-play now reuses the subtree this way. Both runs below start all 512 games at once, so games finish in a wave, and the fair comparison is how long each took to finish the same number:
+
+| games finished | without reuse | with reuse | speed-up |
+|---|---|---|---|
+| 50 | 170 s | 110 s | 1.55× |
+| 100 | 240 s | 146 s | 1.64× |
+| 200 | 366 s | 216 s | 1.69× |
+| 300 | 486 s | 266 s | 1.83× |
+| 454 | 596 s | 336 s | 1.77× |
+
+About 1.57× of that is the evaluations reuse saves. The rest is the run with reuse evaluating faster, about 47,100 positions a second against 41,800, which is within the desktop's run-to-run variation. Copying the subtrees raised the tree work from 3.1% to 4.3% of each step. Measure such comparisons on an idle GPU: a first run with reuse shared the GPU with a game and evaluated about 15× slower.
 
 ## CPU parallelism
 
