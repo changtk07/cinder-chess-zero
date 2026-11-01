@@ -54,12 +54,13 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 - PUCT selection, with the network supplying move priors and position values at the leaves, and exact values for finished games.
 - Each search returns root visit counts. The move is either the most visited or sampled with a temperature.
 - A search pauses whenever it reaches a position the network must evaluate, so many searches can share one batch.
+- Self-play keeps the subtree of the move played as the next search's root, and tops it up to `--sims` visits rather than running `--sims` new simulations. Matches start each search afresh, since each side's network searches only its own moves.
 
 **Self-play** (`src/engine/self_play.rs`)
 
 - Many games run at once. Each step, every game's search advances to its next position needing the network, and all of those positions are evaluated in one batch on the GPU.
 - Moves are sampled by visit count for the first 30 plies, then chosen greedily. `--seed` fixes the untrained network's weights and seeds every game's own random generator, so runs with the same seed write the same samples, on the GPU as well.
-- Dirichlet noise (alpha 0.3, a quarter of each prior) is mixed into every search's root priors, so games explore moves the network rates low.
+- Dirichlet noise (alpha 0.3, a quarter of each prior) is mixed into every search's root priors, so games explore moves the network rates low. A reused root gets fresh noise in its existing priors.
 - Every move played becomes a training sample, written out when its game ends.
 
 **Training** (`src/engine/run.rs`, `src/engine/training.rs`)
@@ -80,7 +81,8 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
   - Maybe: attention's matrix multiplies, a thousand or more tiny products per call, still run far below the GPU's speed.
 - [ ] Reuse the search tree between moves:
   - [x] Measure how many of each search's visits the chosen move's subtree holds: 36% with a network trained for ten generations, so reuse would play about 1.57× the games per hour (`docs/performance.md`, "Tree reuse").
-  - A reused root is already expanded, so noise must be mixed into its existing priors. Decide whether `--sims` means new simulations per move or total visits at the root, since samples record visits.
+  - [x] Self-play reuses the subtree, with fresh noise mixed into the reused root's priors, and `--sims` counts the root's total visits, so samples keep recording the same number of visits.
+  - [ ] Measure the games per hour with reuse on an idle GPU, against 454 games in the first 10 minutes without it (`docs/performance.md`, "Tree reuse").
   - Caching evaluations by Zobrist hash and halfmove clock is an alternative or a complement.
 - [ ] Training:
   - [x] A training loop alternating self-play and training, with runs that stop at any point and continue on either machine.

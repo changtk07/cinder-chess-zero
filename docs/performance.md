@@ -147,6 +147,8 @@ How much of each search a reused tree would carry over: the visits under the mov
 
 If a search topped the reused root up to its simulation count rather than adding a full count of new simulations, it would need about 36% fewer evaluations, about 1.57× the games per hour. Sampled plies reuse less, since they sometimes play a move the search rated lower. A stronger network concentrates its searches more, so the share likely grows with training.
 
+Self-play now reuses the subtree this way. The baseline to compare it with: the same network and settings without reuse finished 454 games in the first 10 minutes, at about 42,000 evaluations per second. A run with reuse on 2026-11-01 ran while a game used the GPU and evaluated about 15× slower, so it doesn't count; the comparison still needs an idle GPU.
+
 ## CPU parallelism
 
 Tree work on one thread takes about 0.36 ms per 256-game step, against about 17 ms for the network. With rayon over 24 threads it took about 3.6 ms, and the network call itself rose from about 17.4 to 18.9 ms. Dispatching thousands of microsecond tasks costs more than it saves, and idle workers likely compete with the thread driving the GPU. Rayon was slower at every size tried, so the tree work is sequential.

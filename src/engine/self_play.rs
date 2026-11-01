@@ -106,8 +106,14 @@ impl Game {
     }
 
     /// Plays the move of each completed search until a search needs the network, leaving its
-    /// position pending. Returns the record and training samples instead if the game ends.
-    fn advance(&mut self, config: &SelfPlayConfig) -> Option<(GameRecord, Vec<Sample>)> {
+    /// position pending. Returns the record and training samples instead if the game ends. With
+    /// `reuse_tree`, each search starts from the subtree of the move played before it, so it only
+    /// tops that up to its simulations; only a game with one network can reuse its trees.
+    fn advance(
+        &mut self,
+        config: &SelfPlayConfig,
+        reuse_tree: bool,
+    ) -> Option<(GameRecord, Vec<Sample>)> {
         while !self.search.next_leaf(&mut self.state) {
             self.n_sims += self.search.n_sims_done();
             let temperature = if self.ply < config.sampling_plies {
@@ -145,7 +151,18 @@ impl Game {
                 return Some((record, self.take_samples(result)));
             }
 
-            self.search.reset();
+            if reuse_tree {
+                self.search.reuse_subtree(mv);
+                // A reused root is already expanded, so its noise can't come with its evaluation
+                if config.noise_fraction > 0.0 {
+                    let rng = &mut self.rng;
+                    self.search.mix_into_root_priors(|priors| {
+                        add_noise(priors, config.noise_alpha, config.noise_fraction, rng)
+                    });
+                }
+            } else {
+                self.search.reset();
+            }
         }
 
         None
@@ -274,7 +291,7 @@ impl SelfPlay {
             let mut on_game_time = Duration::ZERO;
             let mut i = 0;
             while i < self.games.len() {
-                let Some((record, samples)) = self.games[i].advance(config) else {
+                let Some((record, samples)) = self.games[i].advance(config, true) else {
                     i += 1;
                     continue;
                 };
@@ -292,7 +309,7 @@ impl SelfPlay {
                 // The new game in this slot needs its first position evaluated too
                 self.games[i].restart();
                 self.n_started += 1;
-                let record = self.games[i].advance(config);
+                let record = self.games[i].advance(config, true);
                 debug_assert!(
                     record.is_none(),
                     "a new game can't end before its first move"
@@ -405,7 +422,7 @@ pub(crate) fn play_match<B: Backend>(
     loop {
         let mut i = 0;
         while i < games.len() {
-            let Some((record, _)) = games[i].0.advance(config) else {
+            let Some((record, _)) = games[i].0.advance(config, false) else {
                 i += 1;
                 continue;
             };
@@ -430,7 +447,7 @@ pub(crate) fn play_match<B: Backend>(
             game.restart();
             *white = n_started % 2;
             n_started += 1;
-            let record = game.advance(config);
+            let record = game.advance(config, false);
             debug_assert!(
                 record.is_none(),
                 "a new game can't end before its first move"
@@ -547,9 +564,9 @@ mod tests {
             }
         }
 
-        // Every move came from a complete search of 8 simulations
+        // Every search ran at least one simulation, and the reused subtrees saved some of the 8
         let total_plies: usize = stats.games.iter().map(|record| record.plies).sum();
-        assert_eq!(stats.n_sims, total_plies * 8);
+        assert!((total_plies..total_plies * 8).contains(&stats.n_sims));
         // Each step evaluates one position per game still going, never more than the slots
         assert!(stats.n_steps <= stats.n_evaluations);
         assert!(stats.n_evaluations <= stats.n_steps * 4);
@@ -595,6 +612,35 @@ mod tests {
             noisy,
             first_search_visits(&SelfPlayConfig::new().with_noise_fraction(0.0))
         );
+    }
+
+    #[test]
+    fn a_reused_root_gets_noise_too() {
+        // The root priors of a game's second search, which reuses the first one's subtree, when
+        // every evaluation is uniform
+        let second_root_priors = |config: &SelfPlayConfig| {
+            let mut game = Game::new(&MctsConfig::new().with_n_sims(50), 0);
+            while game.ply == 0 {
+                assert!(game.advance(config, true).is_none());
+                let n_moves = game.search.leaf_moves().len();
+                let evaluation = Evaluation {
+                    priors: vec![1.0 / n_moves as f32; n_moves],
+                    value: 0.0,
+                };
+                game.apply(evaluation, config);
+            }
+            let mut priors = vec![];
+            game.search
+                .mix_into_root_priors(|root_priors| priors = root_priors.to_vec());
+            priors
+        };
+
+        let plain = second_root_priors(&SelfPlayConfig::new().with_noise_fraction(0.0));
+        assert_eq!(plain, vec![0.05; 20]);
+        let noisy = second_root_priors(&SelfPlayConfig::new());
+        assert_eq!(noisy.len(), 20);
+        assert!((noisy.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        assert_ne!(noisy, plain);
     }
 
     #[test]

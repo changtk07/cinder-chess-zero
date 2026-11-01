@@ -10,6 +10,7 @@ use rand::{
 };
 use std::{cmp::Ordering, ops::Range};
 
+#[derive(Clone, Copy)]
 struct Node {
     mv: Option<Move>,
     n_visits: usize,
@@ -70,8 +71,9 @@ pub(crate) struct MctsConfig {
     /// results so far
     #[config(default = 1.5)]
     c_puct: f32,
-    /// Simulations per search. The first one expands the root, so the root's moves get
-    /// `n_sims - 1` visits in total.
+    /// Visits the root reaches in each search. A fresh search's first simulation expands the root,
+    /// so the root's moves get `n_sims - 1` visits in total. A search that reuses a subtree starts
+    /// with its visits and only runs the simulations still missing.
     #[config(default = 800)]
     n_sims: usize,
 }
@@ -108,16 +110,61 @@ impl Search {
         self.path.clear();
     }
 
+    /// Keeps the subtree of the root's move `mv` as the new root, ready to search the position
+    /// after `mv` with the visits it already has. Starts afresh if `mv` was never visited.
+    pub(crate) fn reuse_subtree(&mut self, mv: Move) {
+        let child = self.nodes[0]
+            .children()
+            .find(|&i| self.nodes[i].mv == Some(mv))
+            .filter(|&i| self.nodes[i].n_visits > 0);
+        let Some(child) = child else {
+            self.reset();
+            return;
+        };
+
+        // Copies the subtree breadth first, so each node's children stay contiguous
+        let mut nodes = Vec::with_capacity(self.config.n_sims * 4);
+        nodes.push(Node {
+            mv: None,
+            ..self.nodes[child]
+        });
+        let mut next = 0;
+        while next < nodes.len() {
+            let children = nodes[next].children();
+            nodes[next].first_child = nodes.len() as u32;
+            nodes.extend(children.map(|i| self.nodes[i]));
+            next += 1;
+        }
+
+        self.nodes = nodes;
+        self.n_sims_done = 0;
+        self.path.clear();
+    }
+
+    /// Mixes into the priors of the root's moves with `mix`, if the root is already expanded, as a
+    /// reused one is. A fresh root's priors come with its evaluation instead.
+    pub(crate) fn mix_into_root_priors(&mut self, mix: impl FnOnce(&mut [f32])) {
+        let children = self.nodes[0].children();
+        if children.is_empty() {
+            return;
+        }
+        let mut priors: Vec<f32> = children.clone().map(|i| self.nodes[i].prior).collect();
+        mix(&mut priors);
+        for (i, prior) in children.zip(priors) {
+            self.nodes[i].prior = prior;
+        }
+    }
+
     /// Runs simulations until one reaches a position the network must evaluate, leaving `state`
     /// there with its legal moves in `leaf_moves`. Finished games are scored without the network.
-    /// Returns false once every simulation is done, with `state` back at the root.
+    /// Returns false once the root has its `n_sims` visits, with `state` back at the root.
     pub(crate) fn next_leaf(&mut self, state: &mut State) -> bool {
         debug_assert!(
             self.path.is_empty(),
             "the pending leaf must be applied first"
         );
 
-        while self.n_sims_done < self.config.n_sims {
+        while self.nodes[0].n_visits < self.config.n_sims {
             let leaf = self.select(state);
 
             if let Some(value) = self.nodes[leaf].terminal {
@@ -152,6 +199,7 @@ impl Search {
         self.path.len() == 1
     }
 
+    /// Simulations run since the search started, not counting the visits of a reused subtree.
     pub(crate) fn n_sims_done(&self) -> usize {
         self.n_sims_done
     }
@@ -397,6 +445,100 @@ mod tests {
         let total_visits: usize = result.visits.iter().map(|(_, n)| n).sum();
         assert_eq!(result.visits.len(), 20);
         assert_eq!(total_visits, n_sims - 1);
+    }
+
+    // Runs the search's remaining simulations with the tiny model, returning how many evaluations
+    // they needed
+    fn finish(search: &mut Search, state: &mut State) -> usize {
+        let model = tiny_model();
+        let mut n_evaluations = 0;
+        while search.next_leaf(state) {
+            let evaluation = model
+                .evaluate(&[&*state], &[search.leaf_moves()], &Default::default())
+                .remove(0);
+            search.apply(state, evaluation);
+            n_evaluations += 1;
+        }
+        n_evaluations
+    }
+
+    fn total_visits(search: &Search) -> usize {
+        search.result().visits.iter().map(|(_, n)| n).sum()
+    }
+
+    #[test]
+    fn a_reused_subtree_keeps_its_visits() {
+        let n_sims = 60;
+        let mut search = Search::new(MctsConfig::new().with_n_sims(n_sims));
+        let mut state = State::from_fen(START_FEN);
+        finish(&mut search, &mut state);
+        let result = search.result();
+        let mv = result.best_move().unwrap();
+        let kept = result.visits.iter().find(|(m, _)| *m == mv).unwrap().1;
+        assert!(
+            kept > 1,
+            "the test needs a move whose own moves were visited"
+        );
+
+        state.make_move(mv);
+        search.reuse_subtree(mv);
+        // The new root holds the old search's visits to its moves: all but its own expansion
+        let moves: Vec<Move> = search.result().visits.iter().map(|(m, _)| *m).collect();
+        assert_eq!(moves, state.generate_moves().as_slice());
+        assert_eq!(total_visits(&search), kept - 1);
+
+        // No game ends this close to the start, so every missing visit needs the network
+        assert_eq!(finish(&mut search, &mut state), n_sims - kept);
+        assert_eq!(search.n_sims_done(), n_sims - kept);
+        assert_eq!(total_visits(&search), n_sims - 1);
+    }
+
+    #[test]
+    fn reusing_an_unvisited_move_starts_afresh() {
+        let mut search = Search::new(MctsConfig::new().with_n_sims(5));
+        let mut state = State::from_fen(START_FEN);
+        finish(&mut search, &mut state);
+        let (mv, _) = *search
+            .result()
+            .visits
+            .iter()
+            .find(|(_, n)| *n == 0)
+            .unwrap();
+
+        state.make_move(mv);
+        search.reuse_subtree(mv);
+        assert!(search.result().visits.is_empty());
+        assert_eq!(finish(&mut search, &mut state), 5);
+    }
+
+    #[test]
+    fn mixing_into_a_reused_roots_priors_steers_its_search() {
+        let n_sims = 200;
+        let mut search = Search::new(MctsConfig::new().with_n_sims(n_sims));
+        let mut state = State::from_fen(START_FEN);
+        finish(&mut search, &mut state);
+        let mv = search.result().best_move().unwrap();
+        state.make_move(mv);
+        search.reuse_subtree(mv);
+        let before = search.result().visits;
+
+        // All the prior on the last move, which then gets most of the new visits
+        search.mix_into_root_priors(|priors| {
+            assert_eq!(priors.len(), before.len());
+            assert!((priors.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+            priors.fill(0.0);
+            *priors.last_mut().unwrap() = 1.0;
+        });
+        finish(&mut search, &mut state);
+        let gained: Vec<usize> = search
+            .result()
+            .visits
+            .iter()
+            .zip(&before)
+            .map(|((_, after), (_, before))| after - before)
+            .collect();
+        let n_new: usize = gained.iter().sum();
+        assert!(2 * gained.last().unwrap() > n_new, "{gained:?}");
     }
 
     #[test]
