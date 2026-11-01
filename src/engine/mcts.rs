@@ -13,12 +13,14 @@ use std::{cmp::Ordering, ops::Range};
 #[derive(Clone, Copy)]
 struct Node {
     mv: Option<Move>,
-    n_visits: usize,
+    // Searches are capped at 65,535 visits, since samples store them in 16 bits
+    n_visits: u32,
     // From the perspective of the side to move at this node
     value_sum: f32,
     prior: f32,
-    // Exact value of a finished game, so the model is never asked to guess it
-    terminal: Option<f32>,
+    // Exact value of a finished game, so the model is never asked to guess it: -1 for checkmate,
+    // 0 for a draw
+    terminal: Option<i8>,
     // Children are pushed together on expansion, so they occupy a contiguous range of nodes
     first_child: u32,
     n_children: u8,
@@ -175,22 +177,22 @@ impl Search {
             "the pending leaf must be applied first"
         );
 
-        while self.nodes[0].n_visits < self.n_sims {
+        while (self.nodes[0].n_visits as usize) < self.n_sims {
             let leaf = self.select(state);
 
             if let Some(value) = self.nodes[leaf].terminal {
-                self.backup(state, value);
+                self.backup(state, value as f32);
                 continue;
             }
 
             let moves = state.generate_moves();
             if let Some(outcome) = state.outcome(&moves) {
                 let value = match outcome {
-                    Outcome::Checkmate => -1.0,
-                    Outcome::Draw => 0.0,
+                    Outcome::Checkmate => -1,
+                    Outcome::Draw => 0,
                 };
                 self.nodes[leaf].terminal = Some(value);
-                self.backup(state, value);
+                self.backup(state, value as f32);
                 continue;
             }
 
@@ -238,7 +240,7 @@ impl Search {
         SearchResult {
             visits: root
                 .children()
-                .map(|i| (self.nodes[i].mv.unwrap(), self.nodes[i].n_visits))
+                .map(|i| (self.nodes[i].mv.unwrap(), self.nodes[i].n_visits as usize))
                 .collect(),
         }
     }
@@ -550,6 +552,12 @@ mod tests {
             .collect();
         let n_new: usize = gained.iter().sum();
         assert!(2 * gained.last().unwrap() > n_new, "{gained:?}");
+    }
+
+    #[test]
+    fn nodes_stay_small() {
+        // Self-play keeps a tree for every game at once
+        assert_eq!(std::mem::size_of::<Node>(), 24);
     }
 
     #[test]
