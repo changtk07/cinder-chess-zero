@@ -34,7 +34,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 
 - Bitboards, with attack tables and Zobrist keys generated at compile time.
 - Legal move generation from pin and check masks, without trying moves and undoing them.
-- Make/unmake with incremental Zobrist hashing.
+- Make/unmake with incremental Zobrist hashing. A double push records an en passant square only if an enemy pawn attacks it, so positions that differ only by an unusable square count as the same.
 - Game outcomes: checkmate, stalemate, the 50-move rule, threefold repetition and insufficient material.
 - FEN parsing and perft.
 
@@ -57,7 +57,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 **Self-play** (`src/engine/self_play.rs`)
 
 - Many games run at once. Each step, every game's search advances to its next position needing the network, and all of those positions are evaluated in one batch on the GPU.
-- Moves are sampled by visit count for the first 30 plies, then chosen greedily. `--seed` fixes the untrained network's weights and seeds every game's own random generator, so runs with the same seed write the same samples, on the GPU as well.
+- Moves are sampled by visit count for the first 30 plies, then chosen greedily. Each game has its own random generator, seeded from `--seed` (which also fixes `self-play`'s untrained weights) or a run's seed, so the same seed plays the same games, on the GPU as well.
 - Dirichlet noise (alpha 0.3, a quarter of each prior) is mixed into every search's root priors, so games explore moves the network rates low. A reused root gets fresh noise in its existing priors.
 - Every move played becomes a training sample, written out when its game ends. A run can instead give each move a full search only by chance (`full_search_share` in its `config.json`), and a fast one of `fast_sims` visits otherwise, as KataGo's playout cap randomization does: then only the full searches become samples, and only they get root noise.
 
@@ -72,7 +72,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 - [x] Batched leaf evaluation on a GPU backend: see [docs/performance.md](docs/performance.md)
 - [x] Self-play data: Dirichlet noise at the root, and recording (position, visit distribution, result) samples
 - [x] Network changes before any weights are trained: inputs encoded apart from the network in `src/engine/encoding.rs`, the board seen from the side to move, a final RMSNorm before the heads, and attention dropout off
-- [ ] Faster network, now about 98% of self-play time:
+- [ ] Faster network, now about 95% of self-play time:
   - [x] 2D linear layers and a fused query/key/value projection: self-play about 1.7× faster on the laptop.
   - [x] 64 tokens instead of 65: about 25% faster again at the current size, more at smaller ones.
   - [x] A default network size for both the RTX 4090 desktop and the RTX 5080 laptop: 8 blocks of width 256, with 512 games at once on both. Self-play runs about 1.35× as fast as 8 × 384 on the desktop and 2× on the laptop (`docs/performance.md`, "Network size").
@@ -88,15 +88,13 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
   - [x] Win, draw and loss probabilities from the value head instead of a single score, so a surely drawn position and an unclear one look different.
   - [x] Learning rate and training steps: three runs on the desktop found neither 3× the steps nor a 3× higher learning rate better than the defaults of 3e-4 and 1,000 steps ([docs/training.md](docs/training.md)).
   - [x] Matches between a run's networks with `cinder match`, against references kept every ten generations, or each generation against the one before.
+  - [ ] Playout cap randomization (`full_search_share` and `fast_sims` in a run's `config.json`): a trial against full searches for the same GPU time is running ([docs/training.md](docs/training.md)).
+  - [ ] A long run.
 - [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws.
 - [ ] UCI interface:
   - Print promotions as `a7a8q` rather than `a7a8=q`, together with the `play()` test helper, which matches moves by that string.
   - Validate the positions it's given: `State::from_fen` accepts impossible positions, where the side not to move is in check, and `Position::from_fen` panics on malformed squares.
-- [ ] Cleanups, when convenient:
-  - Merge the four promotion helpers and the two castling helpers in `State::make_move`, checked with perft.
-  - Share one ray-attack helper between the rook and bishop attack masks and the pin and check masks, checking that perft 5 isn't slower.
-  - Shrink search tree nodes from 40 to 24 bytes, with `u32` visit counts and a flag for finished games. Only needed for much larger `--parallel`.
-  - Maybe set the en passant square only when a capture is possible. Today it's set after every double push, so a repetition can be detected up to a move late, and the network sees a flag that changes nothing.
+- [x] Cleanups: one helper each for promotions, castling, piece moves and sliding attacks, with perft 5 as fast as before; 24-byte search tree nodes; and en passant squares only where a pawn can capture.
 
 ## License
 

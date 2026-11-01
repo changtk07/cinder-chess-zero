@@ -1,10 +1,8 @@
 # Performance notes
 
-How self-play runs fast on an RTX 4090 under WSL2, with measurements to compare future changes against and the pitfalls hit along the way. Measured 2026-10-25 and 2026-10-26; the 2D layers and fused attention were measured on a laptop on 2026-10-28, and the 4090 figures predate them, except the network size measurements of 2026-10-31.
+How self-play runs fast on an RTX 4090 desktop and an RTX 5080 laptop under WSL2, with measurements to compare future changes against and the pitfalls hit along the way. Each measurement says when and where it was taken.
 
-Self-play runs at about 43,000 simulations/s on the 4090 with the default network of 8 blocks of width 256: 512 games at once, with their positions evaluated in batches on the GPU in bf16 and the tree work on one CPU thread. Before this work it ran about 30 simulations/s on the CPU, and the first batched version ran about 15,500 with 8 blocks of width 384. The network is still about 95% of every step, so further speed has to come from the network.
-
-The work is in the commits from `feat: add bench command for network and search throughput` (826ed90) through `feat: play self-play games in parallel with batched evaluation`.
+Self-play evaluates about 43,000 positions a second on the 4090 with the default network of 8 blocks of width 256: 512 games at once, their positions evaluated in batches on the GPU in bf16, the tree work on one CPU thread, and each search reusing the subtree of the move played before it. At the 200 simulations per move `train` uses, that's about 5,000 games an hour. Before this work it ran about 30 simulations a second on the CPU. The network is still about 95% of every step, so further speed has to come from the network or from fewer evaluations per move.
 
 ## Environment
 
@@ -36,7 +34,7 @@ Unless they say otherwise, the measurements below use 8 blocks of width 384, the
 
 ### Network throughput
 
-Positions/s on an idle GPU, covering input encoding, the forward pass and readback, from `cinder bench 4096 --backend <backend>`:
+Measured on 2026-10-25 on the 4090, with the network then of 8 blocks of width 384, 65 tokens and 3D linear layers, so only the comparison between precisions still holds. Positions/s on an idle GPU, covering input encoding, the forward pass and readback, from `cinder bench 4096 --backend <backend>`:
 
 | batch | CPU | f32 | f16 | bf16 |
 |---|---|---|---|---|
@@ -49,11 +47,9 @@ Positions/s on an idle GPU, covering input encoding, the forward pass and readba
 
 Largest difference from the CPU, for the same weights, in policy or value (the GPU tests in `model.rs`): f32 6e-5, f16 5e-4, bf16 3e-3.
 
-Re-measured on 2026-10-26 at `418e42c`, two runs: bf16 gave 15,027 and 15,270 at batch 256, and 15,329 and 15,418 at 1,024. That's a few percent under the table, with no network code changed in between, so treat differences of that size as run-to-run variation.
-
 ### Self-play
 
-`cinder self-play --sims 800 --backend cuda-bf16`. Steady-state simulations/s, averaged over 5-second reports after kernel compilation:
+Measured on 2026-10-25 on the 4090, with the same network, as the basis for keeping the tree work on one thread. `cinder self-play --sims 800 --backend cuda-bf16`. Steady-state simulations/s, averaged over 5-second reports after kernel compilation:
 
 | parallel games | tree work on 24 threads (rayon) | tree work on 1 thread |
 |---|---|---|
@@ -63,13 +59,7 @@ Re-measured on 2026-10-26 at `418e42c`, two runs: bf16 gave 15,027 and 15,270 at
 
 On one thread, the network takes about 98% of each step and the tree work about 2%.
 
-Re-measured on 2026-10-26 at `418e42c`, after root noise and sample recording were added: 256 games averaged 15,331 simulations/s (14,804-15,502) with `--out` writing samples. The network took 98.2% of each step and writing samples about 0%, so neither feature costs measurable throughput.
-
 With a fixed `--games`, batches shrink as the last games finish, and those games run at near single-position speed. Continuous generation avoids this.
-
-### Kernel headroom
-
-A plain 2D matrix multiply at the network's layer size, `[batch × 65, 384] × [384, 384]`, reaches 37–43 TFLOPS in f32. burn's 3D form, which `Linear` uses on `[batch, 65, 384]` inputs, gets about half that. The whole network does about 10 TFLOPS in f32 and about 20 in bf16.
 
 ### 2D layers and fused attention
 
@@ -178,10 +168,11 @@ Extra cores become worth it only once the network is roughly 10× faster and the
 
 ## Throughput math
 
-At about 43,000 simulations/s on the 4090 and 800 simulations per move, a 150-ply game is 120,000 evaluations, so about 1,300 games per hour across all slots. At the 200 simulations per move `train` uses, it's about 5,200 games per hour, so a generation's 512 games take about six minutes; the laptop plays about two thirds as many. AlphaZero-style training wants tens of thousands of games, so the remaining levers are:
+With tree reuse and a network trained for ten generations, the 4090 played a generation's 512 games of 200 simulations per move in about six minutes, about 5,000 games an hour; the laptop plays about two thirds as many. AlphaZero-style training wants tens of thousands of games at the least, so the remaining levers are:
 
-- Occasional full searches among the cheap ones ("playout cap randomization", as KataGo does), so value targets come from strong searches without every move paying for one.
-- The kernel headroom above.
+- Playout cap randomization, as KataGo does it: most moves get a fast search, and only a share get a full one, which becomes a training sample. It's an option in a run's `config.json`; see [training.md](training.md) for whether it pays.
+- An evaluation cache, for about 1.1–1.25× (above).
+- Faster attention: its many tiny matrix multiplies still run far below the GPU's speed (above).
 
 ## Decisions
 

@@ -89,6 +89,6 @@ The generation 10 networks against each other, 256 games per pair, in a scratch 
 
 So the defaults stay: a learning rate of 3e-4 and 1,000 steps per generation, the cheapest of the three. A learning rate schedule is worth a look once a long run's losses and match results flatten.
 
-### To settle before a long run
+### Since then
 
-- **Cheaper data.** Self-play is nearly all of the time. Reusing the search tree between moves, and fewer simulations for most moves (playout cap randomization, as in KataGo), would both multiply games per hour.
+- **Cheaper data.** Self-play is nearly all of the time. Reusing the search tree between moves now plays games about 1.55–1.8× as fast (`docs/performance.md`, "Tree reuse"). Fewer simulations for most moves, KataGo's playout cap randomization, is a run option whose trial is below.
