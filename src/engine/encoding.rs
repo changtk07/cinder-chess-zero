@@ -261,8 +261,9 @@ mod tests {
     ];
 
     // Made up to set every kind of feature: black to move, white keeps only king-side castling and
-    // black only queen-side, en passant on the e-file, and 7 halfmoves
-    const MADE_UP: &str = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b Kq e3 7 1";
+    // black only queen-side, en passant on the e-file, which black's pawn on d4 can capture, and 7
+    // halfmoves
+    const MADE_UP: &str = "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b Kq e3 7 1";
 
     // The test positions, then their mirror images with black to move
     fn both_colours() -> Vec<String> {
@@ -325,7 +326,7 @@ mod tests {
     fn mirrored_positions_encode_the_same() {
         assert_eq!(
             mirror_fen(MADE_UP),
-            "rnbqkbnr/pppp1ppp/8/4p3/8/8/PPPPPPPP/RNBQKBNR w Qk e6 7 1"
+            "rnbqkbnr/pppp1ppp/8/3Pp3/8/8/PPP1PPPP/RNBQKBNR w Qk e6 7 1"
         );
 
         let sorted = |moves: &[Move]| {

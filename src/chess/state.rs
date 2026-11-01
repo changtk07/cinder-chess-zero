@@ -29,6 +29,8 @@ struct UndoRecord {
 pub struct State {
     pub(crate) board: Board,
     pub(crate) turn: Color,
+    /// The square a pawn just passed with a double push, if a pawn of the side to move attacks it.
+    /// The capture may still be illegal, if the capturing pawn is pinned.
     pub(crate) en_passant: Option<Position>,
     pub(crate) castling_rights: CastlingRights,
     pub(crate) fullmove_number: usize,
@@ -54,6 +56,9 @@ impl State {
             hash: 0,
             history: Vec::with_capacity(64),
         };
+        state.en_passant = state
+            .en_passant
+            .filter(|&square| state.is_en_passant_attacked(square, state.turn));
         state.generate_hash();
         state
     }
@@ -177,11 +182,23 @@ impl State {
         }
     }
 
+    // Records the square passed only if the opponent could capture there, so the position equals
+    // the same one reached without a double push, and repetitions are found at once
     fn make_move_double_push(&mut self, from: Position, to: Position) {
-        let en_passant = Position::middle_of(from, to);
-        self.en_passant = Some(en_passant);
+        let passed = Position::middle_of(from, to);
+        self.en_passant = None;
+        if self.is_en_passant_attacked(passed, self.turn.flip()) {
+            self.en_passant = Some(passed);
+            self.hash ^= RAND_EN_PASSANT[passed.file() as usize];
+        }
         self.halfmove_clock = 0;
-        self.hash ^= RAND_EN_PASSANT[en_passant.file() as usize];
+    }
+
+    // Whether a pawn of `capturer` attacks `square`
+    fn is_en_passant_attacked(&self, square: Position, capturer: Color) -> bool {
+        Bitmask::PAWN_ATTACK_MASKS[capturer.flip()][square]
+            & self.board.pieces[Piece::pawn(capturer)]
+            != Bitmask::EMPTY
     }
 
     fn make_move_en_passant(&mut self, from: Position, to: Position) {
@@ -668,11 +685,26 @@ mod tests {
             "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
             "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
             "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
-            "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
+            "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",
             "8/8/8/4k3/8/8/4K3/4R3 b - - 99 80",
         ] {
             assert_eq!(State::from_fen(fen).to_fen(), fen);
         }
+    }
+
+    #[test]
+    fn en_passant_squares_only_where_a_pawn_can_capture() {
+        // No white pawn attacks e6
+        let parsed =
+            State::from_fen("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2");
+        assert_eq!(parsed.en_passant, None);
+
+        let mut state = State::new();
+        play(&mut state, &["e2e4"]);
+        assert_eq!(state.en_passant, None);
+        play(&mut state, &["d7d5", "e4e5", "f7f5"]);
+        assert_eq!(state.en_passant, Position::from_fen("f6"));
+        assert_eq!(State::from_fen(&state.to_fen()).hash, state.hash);
     }
 
     #[test]
@@ -713,6 +745,14 @@ mod tests {
 
         state.unmake_move();
         assert_eq!(state.outcome(&state.generate_moves()), None);
+    }
+
+    #[test]
+    fn repetition_right_after_a_double_push() {
+        // The position after 1. e4 returns after the knights go out and back
+        let mut state = State::new();
+        play(&mut state, &["e2e4", "g8f6", "g1f3", "f6g8", "f3g1"]);
+        assert_eq!(state.repetitions(), 1);
     }
 
     #[test]
