@@ -125,4 +125,4 @@ Each against their common generation 0, 128 games at 50 simulations per move wit
 - **Its higher value loss didn't mean a worse network.** pcr's positions come from 4× as many games, so they're harder to fit than base's, and the loss compares runs poorly, as in the learning rate trial.
 - **Against generation 0 the two agree with the head-to-head**, this time: pcr scored 0.766 to base's 0.645.
 
-Next: make playout cap randomization the run default, with a quarter of moves in full and 2,048 games per generation as in this trial, unless a long run's settings call for another share. A share or fast search size other than 0.25 and 50 is untested.
+So runs now default to it, with a quarter of moves in full and 2,048 games per generation as in this trial. A share or fast search size other than 0.25 and 50 is untested.

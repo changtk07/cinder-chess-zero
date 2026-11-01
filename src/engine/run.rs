@@ -49,16 +49,18 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Config, Debug)]
 pub(crate) struct RunConfig {
     pub(crate) model: TransformerModelConfig,
-    /// Games each generation's network plays before it's trained on them
-    #[config(default = 512)]
+    /// Games each generation's network plays before it's trained on them. With a quarter of
+    /// moves searched in full, 2,048 games give about as many samples as 512 searched in full.
+    #[config(default = 2048)]
     pub(crate) games_per_generation: usize,
     /// Simulations per move in self-play
     #[config(default = 200)]
     pub(crate) n_sims: usize,
     /// Playout cap randomization: the chance each move gets a full search of `n_sims`, which
     /// becomes a training sample, rather than a fast one of `fast_sims` that only keeps the game
-    /// going. 1 searches every move in full.
-    #[config(default = 1.0)]
+    /// going. 1 searches every move in full. For the same GPU time, a quarter made a clearly
+    /// stronger network than 1 in a trial (`docs/training.md`).
+    #[config(default = 0.25)]
     pub(crate) full_search_share: f64,
     #[config(default = 50)]
     pub(crate) fast_sims: usize,
@@ -306,9 +308,18 @@ fn play_generation<P: Backend>(
         return Ok(());
     }
 
+    let searches = if config.full_search_share >= 1.0 {
+        format!("{} simulations per move", config.n_sims)
+    } else {
+        format!(
+            "{:.0}% of moves searched at {} simulations and the rest at {}",
+            config.full_search_share * 100.0,
+            config.n_sims,
+            config.fast_sims
+        )
+    };
     println!(
-        "\nGeneration {generation}: playing {n_games} games, {} simulations per move{}",
-        config.n_sims,
+        "\nGeneration {generation}: playing {n_games} games, {searches}{}",
         if n_played > 0 {
             format!(" ({n_played} already played)")
         } else {
@@ -645,6 +656,7 @@ mod tests {
         RunConfig::new(tiny_model_config())
             .with_games_per_generation(3)
             .with_n_sims(4)
+            .with_fast_sims(2)
             .with_max_plies(30)
             .with_steps_per_generation(2)
             .with_batch_size(8)

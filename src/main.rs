@@ -33,7 +33,7 @@ Commands:
                       creating it if needed. Stop it any time, then run the same
                       command, here or on another machine, to continue. Training runs
                       in f32; --backend sets self-play's precision. A new run also takes
-                      [--games 512] [--sims 200] [--steps 1000] [--seed 0]
+                      [--games 2048] [--sims 200] [--steps 1000] [--seed 0]
   match <dir> <generation> <generation> [--games 128] [--sims 50] [--parallel 128]
                       play two of a run's kept networks against each other, and
                       report the first's score
@@ -216,6 +216,12 @@ fn train<P: Backend, T: AutodiffBackend>(mut args: Vec<String>) {
         // The first simulation only expands the root, and samples store visit counts in 16 bits
         if !(2..=u16::MAX as usize).contains(&config.n_sims) {
             usage_error(&format!("--sims must be from 2 to {}", u16::MAX));
+        }
+        if config.full_search_share < 1.0 && config.n_sims <= config.fast_sims {
+            usage_error(&format!(
+                "--sims must be more than the {} simulations of the fast searches most moves get",
+                config.fast_sims
+            ));
         }
         println!("Starting a new run in {}", dir.display());
         Run::create::<T>(&dir, config, train_device)
