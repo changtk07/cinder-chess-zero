@@ -92,3 +92,18 @@ So the defaults stay: a learning rate of 3e-4 and 1,000 steps per generation, th
 ### Since then
 
 - **Cheaper data.** Self-play is nearly all of the time. Reusing the search tree between moves now plays games about 1.55–1.8× as fast (`docs/performance.md`, "Tree reuse"). Fewer simulations for most moves, KataGo's playout cap randomization, is a run option whose trial is below.
+
+## Playout cap randomization, on the desktop (in progress)
+
+Started 2026-11-01 at `c901b6a`, on the RTX 4090. Two runs in `runs/pcr-trial`, outside git and only on the desktop, side by side for 4 hours each from the same seed, so they started from the same weights:
+
+| run | searches | games per generation |
+|---|---|---|
+| base | every move in full, 200 visits | 512 |
+| pcr | a quarter of moves in full (`full_search_share` 0.25), the rest 50 visits (`fast_sims`) | 2,048 |
+
+So both train on about the same number of samples per generation, from 512 games' full searches against a quarter of 2,048 games' moves. In the 4 hours base reached about 12 generations and pcr about 7. pcr's value loss stayed about 70% of its results' entropy against about 43% for base, and its policy loss closer to its targets' entropy, about 0.37 above it against 0.46.
+
+The binary predates `7dc4dcf`, so pcr's `history.csv` splits decisive games between white and black wrongly, and its `average_plies` is samples per game, about a quarter of the real length. Draws, decisive totals and losses are right. Neither run can be resumed by later binaries.
+
+Still to do: `target/pcr-trial-matches.sh` plays the latest networks against each other, 512 games at 50 simulations per move, and each against generation 0, into `target/pcr-trial-matches.txt` on the desktop. Judge the head-to-head by how far its decisive games are from an even split, record it here, and decide whether `full_search_share` stays 1 by default.
