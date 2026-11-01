@@ -110,12 +110,16 @@ impl State {
         match move_type {
             MoveType::DoublePush => self.make_move_double_push(from, to),
             MoveType::EnPassant => self.make_move_en_passant(from, to),
-            MoveType::PromotionRook => self.make_move_promotion_rook(to),
-            MoveType::PromotionKnight => self.make_move_promotion_knight(to),
-            MoveType::PromotionBishop => self.make_move_promotion_bishop(to),
-            MoveType::PromotionQueen => self.make_move_promotion_queen(to),
-            MoveType::KingSideCastling => self.make_move_king_side_castling(),
-            MoveType::QueenSideCastling => self.make_move_queen_side_castling(),
+            MoveType::PromotionRook => self.make_move_promotion(to, Piece::rook(self.turn)),
+            MoveType::PromotionKnight => self.make_move_promotion(to, Piece::knight(self.turn)),
+            MoveType::PromotionBishop => self.make_move_promotion(to, Piece::bishop(self.turn)),
+            MoveType::PromotionQueen => self.make_move_promotion(to, Piece::queen(self.turn)),
+            MoveType::KingSideCastling => {
+                self.make_move_castling(Position::KS_CASTLE_ROOK[self.turn])
+            }
+            MoveType::QueenSideCastling => {
+                self.make_move_castling(Position::QS_CASTLE_ROOK[self.turn])
+            }
             MoveType::Standard => self.make_move_standard(moved, captured),
         }
 
@@ -161,12 +165,12 @@ impl State {
             | MoveType::PromotionQueen => {
                 self.board.set_piece(from, Piece::pawn(self.turn));
             }
-            MoveType::KingSideCastling => {
-                let (rook_from, rook_to) = Position::KS_CASTLE_ROOK[self.turn];
-                self.board.move_piece(rook_to, rook_from);
-            }
-            MoveType::QueenSideCastling => {
-                let (rook_from, rook_to) = Position::QS_CASTLE_ROOK[self.turn];
+            MoveType::KingSideCastling | MoveType::QueenSideCastling => {
+                let (rook_from, rook_to) = if move_type == MoveType::KingSideCastling {
+                    Position::KS_CASTLE_ROOK[self.turn]
+                } else {
+                    Position::QS_CASTLE_ROOK[self.turn]
+                };
                 self.board.move_piece(rook_to, rook_from);
             }
             _ => (),
@@ -188,49 +192,17 @@ impl State {
         self.hash ^= RAND_PLACEMENT[Piece::pawn(self.turn.flip())][captured];
     }
 
-    fn make_move_promotion_rook(&mut self, to: Position) {
-        self.board.set_piece(to, Piece::rook(self.turn));
+    // The pawn has already moved to `to`, so it's replaced there
+    fn make_move_promotion(&mut self, to: Position, promoted: Piece) {
+        self.board.set_piece(to, promoted);
         self.en_passant = None;
         self.halfmove_clock = 0;
         self.hash ^= RAND_PLACEMENT[Piece::pawn(self.turn)][to];
-        self.hash ^= RAND_PLACEMENT[Piece::rook(self.turn)][to];
+        self.hash ^= RAND_PLACEMENT[promoted][to];
     }
 
-    fn make_move_promotion_knight(&mut self, to: Position) {
-        self.board.set_piece(to, Piece::knight(self.turn));
-        self.en_passant = None;
-        self.halfmove_clock = 0;
-        self.hash ^= RAND_PLACEMENT[Piece::pawn(self.turn)][to];
-        self.hash ^= RAND_PLACEMENT[Piece::knight(self.turn)][to];
-    }
-
-    fn make_move_promotion_bishop(&mut self, to: Position) {
-        self.board.set_piece(to, Piece::bishop(self.turn));
-        self.en_passant = None;
-        self.halfmove_clock = 0;
-        self.hash ^= RAND_PLACEMENT[Piece::pawn(self.turn)][to];
-        self.hash ^= RAND_PLACEMENT[Piece::bishop(self.turn)][to];
-    }
-
-    fn make_move_promotion_queen(&mut self, to: Position) {
-        self.board.set_piece(to, Piece::queen(self.turn));
-        self.en_passant = None;
-        self.halfmove_clock = 0;
-        self.hash ^= RAND_PLACEMENT[Piece::pawn(self.turn)][to];
-        self.hash ^= RAND_PLACEMENT[Piece::queen(self.turn)][to];
-    }
-
-    fn make_move_king_side_castling(&mut self) {
-        let (rook_from, rook_to) = Position::KS_CASTLE_ROOK[self.turn];
-        self.board.move_piece(rook_from, rook_to);
-        self.en_passant = None;
-        self.halfmove_clock += 1;
-        self.hash ^= RAND_PLACEMENT[Piece::rook(self.turn)][rook_from];
-        self.hash ^= RAND_PLACEMENT[Piece::rook(self.turn)][rook_to];
-    }
-
-    fn make_move_queen_side_castling(&mut self) {
-        let (rook_from, rook_to) = Position::QS_CASTLE_ROOK[self.turn];
+    // The king has already moved, so this moves the rook
+    fn make_move_castling(&mut self, (rook_from, rook_to): (Position, Position)) {
         self.board.move_piece(rook_from, rook_to);
         self.en_passant = None;
         self.halfmove_clock += 1;
@@ -259,14 +231,21 @@ impl State {
         if !masks.is_double_check() {
             self.board.pieces[Piece::pawn(self.turn)]
                 .for_each(|position| self.generate_pawn_moves(position, &masks, &mut moves));
-            self.board.pieces[Piece::knight(self.turn)]
-                .for_each(|position| self.generate_knight_moves(position, &masks, &mut moves));
-            self.board.pieces[Piece::bishop(self.turn)]
-                .for_each(|position| self.generate_bishop_moves(position, &masks, &mut moves));
-            self.board.pieces[Piece::rook(self.turn)]
-                .for_each(|position| self.generate_rook_moves(position, &masks, &mut moves));
-            self.board.pieces[Piece::queen(self.turn)]
-                .for_each(|position| self.generate_queen_moves(position, &masks, &mut moves));
+            let occupancy = self.board.occupancy;
+            let pieces: [(Piece, fn(Position, Bitmask) -> Bitmask); 4] = [
+                (Piece::knight(self.turn), |p, _| {
+                    Bitmask::KNIGHT_ATTACK_MASKS[p]
+                }),
+                (Piece::bishop(self.turn), Bitmask::bishop_attack_mask),
+                (Piece::rook(self.turn), Bitmask::rook_attack_mask),
+                (Piece::queen(self.turn), Bitmask::queen_attack_mask),
+            ];
+            for (piece, attack_mask) in pieces {
+                self.board.pieces[piece].for_each(|position| {
+                    let targets = attack_mask(position, occupancy);
+                    self.generate_piece_moves(position, targets, &masks, &mut moves)
+                });
+            }
         }
 
         self.board.pieces[Piece::king(self.turn)]
@@ -282,13 +261,12 @@ impl State {
         moves: &mut ArrayVec<Move, 218>,
     ) {
         let legal_mask = masks.pin_rays[position] & masks.check_mask;
+        let (forward_delta, start_rank_mask, end_rank_mask) = match self.turn {
+            Color::White => (8i8, Bitmask::RANKS[1], Bitmask::RANKS[7]),
+            Color::Black => (-8i8, Bitmask::RANKS[6], Bitmask::RANKS[0]),
+        };
 
         'push: {
-            let (forward_delta, start_rank_mask, end_rank_mask) = match self.turn {
-                Color::White => (8i8, Bitmask::RANKS[1], Bitmask::RANKS[7]),
-                Color::Black => (-8i8, Bitmask::RANKS[6], Bitmask::RANKS[0]),
-            };
-
             let single_push_position = position.offset_unchecked(forward_delta);
 
             if self.board.is_occupied(single_push_position) {
@@ -296,20 +274,7 @@ impl State {
             }
 
             if legal_mask.contains(single_push_position) {
-                if end_rank_mask.contains(single_push_position) {
-                    moves.extend([
-                        Move::new(position, single_push_position, MoveType::PromotionQueen),
-                        Move::new(position, single_push_position, MoveType::PromotionRook),
-                        Move::new(position, single_push_position, MoveType::PromotionBishop),
-                        Move::new(position, single_push_position, MoveType::PromotionKnight),
-                    ]);
-                } else {
-                    moves.push(Move::new(
-                        position,
-                        single_push_position,
-                        MoveType::Standard,
-                    ));
-                }
+                push_pawn_move(position, single_push_position, end_rank_mask, moves);
             }
 
             if start_rank_mask.contains(position) {
@@ -338,72 +303,20 @@ impl State {
         }
 
         let opponent_mask = self.board.colors[self.turn.flip()];
-        let end_rank_mask = match self.turn {
-            Color::White => Bitmask::RANKS[7],
-            Color::Black => Bitmask::RANKS[0],
-        };
-
-        (attack_mask & opponent_mask & legal_mask).for_each(|p| {
-            if end_rank_mask.contains(p) {
-                moves.extend([
-                    Move::new(position, p, MoveType::PromotionQueen),
-                    Move::new(position, p, MoveType::PromotionRook),
-                    Move::new(position, p, MoveType::PromotionBishop),
-                    Move::new(position, p, MoveType::PromotionKnight),
-                ]);
-            } else {
-                moves.push(Move::new(position, p, MoveType::Standard));
-            }
-        });
+        (attack_mask & opponent_mask & legal_mask)
+            .for_each(|p| push_pawn_move(position, p, end_rank_mask, moves));
     }
 
-    fn generate_knight_moves(
+    // Moves to the squares a knight, bishop, rook or queen on `position` attacks, except the side's
+    // own pieces and squares that leave its king in check
+    fn generate_piece_moves(
         &self,
         position: Position,
+        attack_mask: Bitmask,
         masks: &MoveGenMasks,
         moves: &mut ArrayVec<Move, 218>,
     ) {
         let legal_mask = masks.pin_rays[position] & masks.check_mask;
-        let attack_mask = Bitmask::KNIGHT_ATTACK_MASKS[position];
-        let friendly_mask = self.board.colors[self.turn];
-        (attack_mask & !friendly_mask & legal_mask)
-            .for_each(|p| moves.push(Move::new(position, p, MoveType::Standard)));
-    }
-
-    fn generate_bishop_moves(
-        &self,
-        position: Position,
-        masks: &MoveGenMasks,
-        moves: &mut ArrayVec<Move, 218>,
-    ) {
-        let legal_mask = masks.pin_rays[position] & masks.check_mask;
-        let attack_mask = Bitmask::bishop_attack_mask(position, self.board.occupancy);
-        let friendly_mask = self.board.colors[self.turn];
-        (attack_mask & !friendly_mask & legal_mask)
-            .for_each(|p| moves.push(Move::new(position, p, MoveType::Standard)));
-    }
-
-    fn generate_rook_moves(
-        &self,
-        position: Position,
-        masks: &MoveGenMasks,
-        moves: &mut ArrayVec<Move, 218>,
-    ) {
-        let legal_mask = masks.pin_rays[position] & masks.check_mask;
-        let attack_mask = Bitmask::rook_attack_mask(position, self.board.occupancy);
-        let friendly_mask = self.board.colors[self.turn];
-        (attack_mask & !friendly_mask & legal_mask)
-            .for_each(|p| moves.push(Move::new(position, p, MoveType::Standard)));
-    }
-
-    fn generate_queen_moves(
-        &self,
-        position: Position,
-        masks: &MoveGenMasks,
-        moves: &mut ArrayVec<Move, 218>,
-    ) {
-        let legal_mask = masks.pin_rays[position] & masks.check_mask;
-        let attack_mask = Bitmask::queen_attack_mask(position, self.board.occupancy);
         let friendly_mask = self.board.colors[self.turn];
         (attack_mask & !friendly_mask & legal_mask)
             .for_each(|p| moves.push(Move::new(position, p, MoveType::Standard)));
@@ -593,6 +506,28 @@ impl State {
         }
 
         println!("\nTotal nodes: {}", total_nodes);
+    }
+}
+
+// A pawn move to `to`, or its four promotions if `to` is on the last rank
+fn push_pawn_move(
+    from: Position,
+    to: Position,
+    end_rank_mask: Bitmask,
+    moves: &mut ArrayVec<Move, 218>,
+) {
+    if end_rank_mask.contains(to) {
+        moves.extend(
+            [
+                MoveType::PromotionQueen,
+                MoveType::PromotionRook,
+                MoveType::PromotionBishop,
+                MoveType::PromotionKnight,
+            ]
+            .map(|promotion| Move::new(from, to, promotion)),
+        );
+    } else {
+        moves.push(Move::new(from, to, MoveType::Standard));
     }
 }
 
