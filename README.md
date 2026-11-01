@@ -79,7 +79,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
   - [x] A default network size for both the RTX 4090 desktop and the RTX 5080 laptop: 8 blocks of width 256, with 512 games at once on both. Self-play runs about 1.35× as fast as 8 × 384 on the desktop and 2× on the laptop (`docs/performance.md`, "Network size").
   - Maybe: attention's matrix multiplies, a thousand or more tiny products per call, still run far below the GPU's speed.
 - [ ] Reuse the search tree between moves:
-  - First measure how many of each search's visits the chosen move's subtree holds: that's the share of evaluations reuse would save.
+  - [x] Measure how many of each search's visits the chosen move's subtree holds: 36% with a network trained for ten generations, so reuse would play about 1.57× the games per hour (`docs/performance.md`, "Tree reuse").
   - A reused root is already expanded, so noise must be mixed into its existing priors. Decide whether `--sims` means new simulations per move or total visits at the root, since samples record visits.
   - Caching evaluations by Zobrist hash and halfmove clock is an alternative or a complement.
 - [ ] Training:

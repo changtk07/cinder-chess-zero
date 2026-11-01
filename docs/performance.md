@@ -135,6 +135,18 @@ Two more runs of each 512-game figure for 6, 8 and 10 blocks, alternating sizes,
 
 Unlike the laptop, the desktop gains from 256 to 512 games at every size, 1.35–1.7× at width 256, and 1,024 adds little more. The exception, 10 blocks at 40,951, was measured only once. Fewer blocks also pay off further down: 6 blocks run about 30% faster than 8, against 5–10% on the laptop. During the sweep the GPU drew about 320 W of its 450 W limit, at about 80% utilization, and held its clocks, so it wasn't throttled. The desktop runs 8 × 256 at 512 games about 1.55× as fast as the laptop, and 6 × 256 about 1.9×.
 
+### Tree reuse
+
+How much of each search a reused tree would carry over: the visits under the move played, as a share of the search's visits. Measured on 2026-11-01 with the trained network of a learning rate trial (`docs/training.md`, run a at generation 10), over about 450 games of `train`'s self-play at 200 simulations per move, with root noise and moves sampled for the first 30 plies:
+
+| plies | share of visits under the move played | visits |
+|---|---|---|
+| sampled, the first 30 | 23.5% | 5.4 million |
+| greedy, after that | 39.7% | 19.4 million |
+| all | **36.2%** | 24.8 million |
+
+If a search topped the reused root up to its simulation count rather than adding a full count of new simulations, it would need about 36% fewer evaluations, about 1.57× the games per hour. Sampled plies reuse less, since they sometimes play a move the search rated lower. A stronger network concentrates its searches more, so the share likely grows with training.
+
 ## CPU parallelism
 
 Tree work on one thread takes about 0.36 ms per 256-game step, against about 17 ms for the network. With rayon over 24 threads it took about 3.6 ms, and the network call itself rose from about 17.4 to 18.9 ms. Dispatching thousands of microsecond tasks costs more than it saves, and idle workers likely compete with the thread driving the GPU. Rayon was slower at every size tried, so the tree work is sequential.
