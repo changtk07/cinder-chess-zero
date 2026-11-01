@@ -88,7 +88,8 @@ burn's wgpu backend isn't enabled, so the GPU path is CUDA.
   - [x] Win, draw and loss probabilities from the value head instead of a single score, so a surely drawn position and an unclear one look different.
   - [x] Learning rate and training steps: three trial runs found neither 3× the steps nor a 3× higher learning rate better than the defaults of 3e-4 and 1,000 steps.
   - [x] Matches between a run's networks with `cinder match`, against references kept every ten generations, or each generation against the one before.
-  - [ ] Playout cap randomization (`full_search_share` and `fast_sims` in a run's `config.json`): a trial against full searches for the same GPU time is running.
+  - [x] Playout cap randomization (`full_search_share` and `fast_sims` in a run's `config.json`): for the same GPU time, searching a quarter of moves in full and the rest at 50 visits, with 4× the games per generation, made a clearly stronger network than searching every move in full.
+  - [ ] Make playout cap randomization the run default.
   - [ ] A long run.
 - [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws.
 - [ ] UCI interface:

@@ -93,17 +93,36 @@ So the defaults stay: a learning rate of 3e-4 and 1,000 steps per generation, th
 
 - **Cheaper data.** Self-play is nearly all of the time. Reusing the search tree between moves now plays games about 1.55–1.8× as fast (`docs/performance.md`, "Tree reuse"). Fewer simulations for most moves, KataGo's playout cap randomization, is a run option whose trial is below.
 
-## Playout cap randomization, on the desktop (in progress)
+## Playout cap randomization, on the desktop
 
-Started 2026-11-01 at `c901b6a`, on the RTX 4090. Two runs in `runs/pcr-trial`, outside git and only on the desktop, side by side for 4 hours each from the same seed, so they started from the same weights:
+Run on 2026-11-01 from 17:10 to 21:10 at `c901b6a`, on the RTX 4090. Two runs in `runs/pcr-trial`, outside git and only on the desktop, side by side for 4 hours each from the same seed, so they started from the same weights:
 
-| run | searches | games per generation |
-|---|---|---|
-| base | every move in full, 200 visits | 512 |
-| pcr | a quarter of moves in full (`full_search_share` 0.25), the rest 50 visits (`fast_sims`) | 2,048 |
+| run | searches | games per generation | generations in 4 hours |
+|---|---|---|---|
+| base | every move in full, 200 visits | 512 | 14 |
+| pcr | a quarter of moves in full (`full_search_share` 0.25), the rest 50 visits (`fast_sims`) | 2,048 | 8 |
 
-So both train on about the same number of samples per generation, from 512 games' full searches against a quarter of 2,048 games' moves. In the 4 hours base reached about 12 generations and pcr about 7. pcr's value loss stayed about 70% of its results' entropy against about 43% for base, and its policy loss closer to its targets' entropy, about 0.37 above it against 0.46.
+So both trained on about the same number of samples per generation, from 512 games' full searches against a quarter of 2,048 games' moves, with the run defaults otherwise. pcr's value loss stayed about 70% of its results' entropy against about 40–45% for base, and its policy loss closer to its targets' entropy, about 0.37 above it against about 0.48.
 
 The binary predates `7dc4dcf`, so pcr's `history.csv` splits decisive games between white and black wrongly, and its `average_plies` is samples per game, about a quarter of the real length. Draws, decisive totals and losses are right. Neither run can be resumed by later binaries.
 
-Still to do: `target/pcr-trial-matches.sh` plays the latest networks against each other, 512 games at 50 simulations per move, and each against generation 0, into `target/pcr-trial-matches.txt` on the desktop. Judge the head-to-head by how far its decisive games are from an even split, record it here, and decide whether `full_search_share` stays 1 by default.
+The latest networks against each other, 512 games at 50 simulations per move without root noise, in a scratch run holding copies of their checkpoints:
+
+| match | base 14's wins | draws | pcr 8's wins | pcr's score | decisive games from an even split |
+|---|---|---|---|---|---|
+| base 14 against pcr 8 | 76 | 284 | 152 | 0.574, +52 Elo | 5.0 standard deviations |
+
+Each against their common generation 0, 128 games at 50 simulations per move without root noise:
+
+| run | wins | draws | losses | score | Elo |
+|---|---|---|---|---|---|
+| base 14 | 41 | 83 | 4 | 0.645 | +103 |
+| pcr 8 | 71 | 54 | 3 | 0.766 | +206 |
+
+### Findings
+
+- **For the same GPU time, playout cap randomization made the clearly stronger network**, with fewer generations: pcr won 152 of the 228 decisive games, where equal networks would split them about 114 each, give or take 8.
+- **Its higher value loss didn't mean a worse network.** pcr's positions come from 4× as many games, so they're harder to fit than base's, and the loss compares runs poorly, as in the learning rate trial.
+- **Against generation 0 the two agree with the head-to-head**, this time: pcr scored 0.766 to base's 0.645.
+
+Next: make playout cap randomization the run default, with a quarter of moves in full and 2,048 games per generation as in this trial, unless a long run's settings call for another share. A share or fast search size other than 0.25 and 50 is untested.
