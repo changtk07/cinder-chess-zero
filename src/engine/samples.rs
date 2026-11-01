@@ -26,7 +26,8 @@ use std::{
 };
 
 const MAGIC: &[u8; 6] = b"CNDRSP";
-const VERSION: u8 = 1;
+// 2 since games record their result and length, which a version 1 file would be misread without
+const VERSION: u8 = 2;
 
 /// One position from a self-play game, as a training target.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -345,6 +346,20 @@ mod tests {
         let games: Vec<_> = file.games.iter().map(|game| &game.samples).collect();
         assert_eq!(games, [&vec![complete], &vec![appended]]);
         assert_eq!(file.truncated_bytes, 0);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn files_of_an_older_version_are_left_alone() {
+        let path = temp_path("version-1");
+        let mut old = MAGIC.to_vec();
+        old.push(1);
+        old.extend_from_slice(&[0, 0, 0, 0, 1, 0, 59]);
+        fs::write(&path, &old).unwrap();
+
+        assert!(read_samples(&path).is_err());
+        assert!(SampleWriter::open(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), old);
         fs::remove_file(&path).unwrap();
     }
 
