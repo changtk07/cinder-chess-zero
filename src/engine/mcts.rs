@@ -83,6 +83,8 @@ pub(crate) struct MctsConfig {
 pub(crate) struct Search {
     nodes: Vec<Node>,
     config: MctsConfig,
+    // Visits the root reaches in this search: `config.n_sims` unless lowered for a fast search
+    n_sims: usize,
     n_sims_done: usize,
     // Nodes from the root to the current leaf; empty between simulations
     path: Vec<usize>,
@@ -93,6 +95,7 @@ impl Search {
     pub(crate) fn new(config: MctsConfig) -> Self {
         let mut search = Self {
             nodes: vec![],
+            n_sims: config.n_sims,
             config,
             n_sims_done: 0,
             path: vec![],
@@ -106,8 +109,15 @@ impl Search {
     pub(crate) fn reset(&mut self) {
         self.nodes.clear();
         self.nodes.push(Node::new(None, 1.0));
+        self.n_sims = self.config.n_sims;
         self.n_sims_done = 0;
         self.path.clear();
+    }
+
+    /// Lowers the visits this search reaches from the configured `n_sims`, until the next `reset`
+    /// or `reuse_subtree`.
+    pub(crate) fn set_n_sims(&mut self, n_sims: usize) {
+        self.n_sims = n_sims;
     }
 
     /// Keeps the subtree of the root's move `mv` as the new root, ready to search the position
@@ -137,6 +147,7 @@ impl Search {
         }
 
         self.nodes = nodes;
+        self.n_sims = self.config.n_sims;
         self.n_sims_done = 0;
         self.path.clear();
     }
@@ -157,14 +168,14 @@ impl Search {
 
     /// Runs simulations until one reaches a position the network must evaluate, leaving `state`
     /// there with its legal moves in `leaf_moves`. Finished games are scored without the network.
-    /// Returns false once the root has its `n_sims` visits, with `state` back at the root.
+    /// Returns false once the root has the search's visits, with `state` back at the root.
     pub(crate) fn next_leaf(&mut self, state: &mut State) -> bool {
         debug_assert!(
             self.path.is_empty(),
             "the pending leaf must be applied first"
         );
 
-        while self.nodes[0].n_visits < self.config.n_sims {
+        while self.nodes[0].n_visits < self.n_sims {
             let leaf = self.select(state);
 
             if let Some(value) = self.nodes[leaf].terminal {

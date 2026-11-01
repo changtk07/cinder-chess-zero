@@ -32,6 +32,14 @@ pub(crate) struct SelfPlayConfig {
     noise_alpha: f32,
     #[config(default = 0.25)]
     noise_fraction: f32,
+    /// Playout cap randomization, as in KataGo: each move's search is a full one of the search's
+    /// `n_sims` visits with this chance, and a fast one of `fast_sims` visits otherwise. Only full
+    /// searches become training samples, and only they get root noise, so most moves cost little
+    /// and the games still finish. 1 searches every move in full.
+    #[config(default = 1.0)]
+    full_search_share: f64,
+    #[config(default = 50)]
+    fast_sims: usize,
     /// Seeds one generator that seeds each slot's own, so no two slots or seeds share a stream
     #[config(default = 0)]
     seed: u64,
@@ -75,6 +83,8 @@ struct Game {
     ply: usize,
     // Simulations in the searches already finished this game
     n_sims: usize,
+    // Whether the current search is a full one, which becomes a training sample
+    full_search: bool,
     // Positions played so far, waiting for the game's result
     pending: Vec<PendingSample>,
 }
@@ -86,23 +96,37 @@ struct PendingSample {
 }
 
 impl Game {
-    fn new(mcts_config: &MctsConfig, seed: u64) -> Self {
-        Self {
+    fn new(mcts_config: &MctsConfig, config: &SelfPlayConfig, seed: u64) -> Self {
+        let mut game = Self {
             state: State::new(),
             search: Search::new(mcts_config.clone()),
             rng: StdRng::seed_from_u64(seed),
             ply: 0,
             n_sims: 0,
+            full_search: true,
             pending: vec![],
-        }
+        };
+        game.choose_search(config);
+        game
     }
 
-    fn restart(&mut self) {
+    fn restart(&mut self, config: &SelfPlayConfig) {
         self.state = State::new();
         self.search.reset();
         self.ply = 0;
         self.n_sims = 0;
         self.pending.clear();
+        self.choose_search(config);
+    }
+
+    // Makes the next search a full or a fast one. Draws from the generator only when searches can
+    // be fast, so games without fast searches stay the same for a seed.
+    fn choose_search(&mut self, config: &SelfPlayConfig) {
+        self.full_search =
+            config.full_search_share >= 1.0 || self.rng.random::<f64>() < config.full_search_share;
+        if !self.full_search {
+            self.search.set_n_sims(config.fast_sims);
+        }
     }
 
     /// Plays the move of each completed search until a search needs the network, leaving its
@@ -126,19 +150,21 @@ impl Game {
                 .sample_move(temperature, &mut self.rng)
                 .expect("only unfinished games are searched");
 
-            self.pending.push(PendingSample {
-                fen: self.state.to_fen(),
-                visits: search_result
-                    .visits
-                    .iter()
-                    .map(|&(mv, n_visits)| {
-                        let n_visits =
-                            u16::try_from(n_visits).expect("visit counts fit in 16 bits");
-                        (mv, n_visits)
-                    })
-                    .collect(),
-                turn: self.state.turn,
-            });
+            if self.full_search {
+                self.pending.push(PendingSample {
+                    fen: self.state.to_fen(),
+                    visits: search_result
+                        .visits
+                        .iter()
+                        .map(|&(mv, n_visits)| {
+                            let n_visits =
+                                u16::try_from(n_visits).expect("visit counts fit in 16 bits");
+                            (mv, n_visits)
+                        })
+                        .collect(),
+                    turn: self.state.turn,
+                });
+            }
 
             self.state.make_move(mv);
             self.ply += 1;
@@ -153,15 +179,16 @@ impl Game {
 
             if reuse_tree {
                 self.search.reuse_subtree(mv);
-                // A reused root is already expanded, so its noise can't come with its evaluation
-                if config.noise_fraction > 0.0 {
-                    let rng = &mut self.rng;
-                    self.search.mix_into_root_priors(|priors| {
-                        add_noise(priors, config.noise_alpha, config.noise_fraction, rng)
-                    });
-                }
             } else {
                 self.search.reset();
+            }
+            self.choose_search(config);
+            // A reused root is already expanded, so its noise can't come with its evaluation
+            if reuse_tree && self.full_search && config.noise_fraction > 0.0 {
+                let rng = &mut self.rng;
+                self.search.mix_into_root_priors(|priors| {
+                    add_noise(priors, config.noise_alpha, config.noise_fraction, rng)
+                });
             }
         }
 
@@ -179,7 +206,7 @@ impl Game {
     }
 
     fn apply(&mut self, mut evaluation: Evaluation, config: &SelfPlayConfig) {
-        if self.search.leaf_is_root() && config.noise_fraction > 0.0 {
+        if self.search.leaf_is_root() && self.full_search && config.noise_fraction > 0.0 {
             add_noise(
                 &mut evaluation.priors,
                 config.noise_alpha,
@@ -249,12 +276,17 @@ pub(crate) struct SelfPlay {
 
 impl SelfPlay {
     pub(crate) fn new(mcts_config: &MctsConfig, config: &SelfPlayConfig) -> Self {
+        // The first simulation only expands the root, so a search needs two to compare moves
+        assert!(
+            config.full_search_share >= 1.0 || config.fast_sims >= 2,
+            "fast searches need at least 2 simulations"
+        );
         let n_slots = config.n_parallel.min(config.n_games);
         let mut seeds = StdRng::seed_from_u64(config.seed);
         Self {
             config: config.clone(),
             games: (0..n_slots)
-                .map(|_| Game::new(mcts_config, seeds.random()))
+                .map(|_| Game::new(mcts_config, config, seeds.random()))
                 .collect(),
             n_started: n_slots,
             finished_sims: 0,
@@ -307,7 +339,7 @@ impl SelfPlay {
                 }
 
                 // The new game in this slot needs its first position evaluated too
-                self.games[i].restart();
+                self.games[i].restart(config);
                 self.n_started += 1;
                 let record = self.games[i].advance(config, true);
                 debug_assert!(
@@ -414,7 +446,7 @@ pub(crate) fn play_match<B: Backend>(
     let mut seeds = StdRng::seed_from_u64(config.seed);
     // Each game, with the index of the network playing white
     let mut games: Vec<(Game, usize)> = (0..n_slots)
-        .map(|i| (Game::new(mcts_config, seeds.random()), i % 2))
+        .map(|i| (Game::new(mcts_config, config, seeds.random()), i % 2))
         .collect();
     let mut n_started = n_slots;
     let mut score = MatchScore::default();
@@ -444,7 +476,7 @@ pub(crate) fn play_match<B: Backend>(
                 continue;
             }
             let (game, white) = &mut games[i];
-            game.restart();
+            game.restart(config);
             *white = n_started % 2;
             n_started += 1;
             let record = game.advance(config, false);
@@ -527,23 +559,33 @@ mod tests {
     use crate::engine::model::tiny_model;
     use burn::backend::NdArray;
 
+    // More games than slots, so finished games are replaced and then slots retired
+    fn test_config(seed: u64) -> SelfPlayConfig {
+        SelfPlayConfig::new()
+            .with_n_parallel(4)
+            .with_n_games(6)
+            .with_max_plies(40)
+            .with_seed(seed)
+    }
+
     // Returns the stats and each finished game with its samples
     fn play(
         model: &TransformerModel<NdArray>,
         seed: u64,
     ) -> (SelfPlayStats, Vec<(GameRecord, Vec<Sample>)>) {
+        play_with(model, &test_config(seed))
+    }
+
+    fn play_with(
+        model: &TransformerModel<NdArray>,
+        config: &SelfPlayConfig,
+    ) -> (SelfPlayStats, Vec<(GameRecord, Vec<Sample>)>) {
         let mcts_config = MctsConfig::new().with_n_sims(8);
-        // More games than slots, so finished games are replaced and then slots retired
-        let config = SelfPlayConfig::new()
-            .with_n_parallel(4)
-            .with_n_games(6)
-            .with_max_plies(40)
-            .with_seed(seed);
         let mut games = vec![];
         let stats = run(
             model,
             &mcts_config,
-            &config,
+            config,
             &Default::default(),
             |record, samples| games.push((record.clone(), samples)),
             |_| {},
@@ -594,7 +636,7 @@ mod tests {
     fn noise_changes_the_search() {
         // One game's first search with uniform priors, so only the noise can favour a move
         let first_search_visits = |config: &SelfPlayConfig| {
-            let mut game = Game::new(&MctsConfig::new().with_n_sims(50), 0);
+            let mut game = Game::new(&MctsConfig::new().with_n_sims(50), config, 0);
             while game.search.next_leaf(&mut game.state) {
                 let n_moves = game.search.leaf_moves().len();
                 let evaluation = Evaluation {
@@ -608,10 +650,13 @@ mod tests {
 
         let noisy = first_search_visits(&SelfPlayConfig::new());
         assert_eq!(noisy, first_search_visits(&SelfPlayConfig::new()));
-        assert_ne!(
-            noisy,
-            first_search_visits(&SelfPlayConfig::new().with_noise_fraction(0.0))
-        );
+        let plain = first_search_visits(&SelfPlayConfig::new().with_noise_fraction(0.0));
+        assert_ne!(noisy, plain);
+        // A fast search isn't a sample, so it explores no more than the network suggests
+        let fast = SelfPlayConfig::new()
+            .with_full_search_share(0.0)
+            .with_fast_sims(50);
+        assert_eq!(first_search_visits(&fast), plain);
     }
 
     #[test]
@@ -619,7 +664,7 @@ mod tests {
         // The root priors of a game's second search, which reuses the first one's subtree, when
         // every evaluation is uniform
         let second_root_priors = |config: &SelfPlayConfig| {
-            let mut game = Game::new(&MctsConfig::new().with_n_sims(50), 0);
+            let mut game = Game::new(&MctsConfig::new().with_n_sims(50), config, 0);
             while game.ply == 0 {
                 assert!(game.advance(config, true).is_none());
                 let n_moves = game.search.leaf_moves().len();
@@ -641,6 +686,49 @@ mod tests {
         assert_eq!(noisy.len(), 20);
         assert!((noisy.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         assert_ne!(noisy, plain);
+        let all_fast = SelfPlayConfig::new()
+            .with_full_search_share(0.0)
+            .with_fast_sims(50);
+        assert_eq!(second_root_priors(&all_fast), plain);
+    }
+
+    #[test]
+    fn only_full_searches_become_samples() {
+        let model = tiny_model();
+        let with_share = |share| {
+            play_with(
+                &model,
+                &test_config(0)
+                    .with_full_search_share(share)
+                    .with_fast_sims(3),
+            )
+        };
+
+        // Fast searches of 3 simulations make moves cheaper than full ones of 8
+        let sims_per_ply = |(stats, _): (SelfPlayStats, Vec<_>)| {
+            let n_plies: usize = stats.games.iter().map(|record| record.plies).sum();
+            stats.n_sims as f64 / n_plies as f64
+        };
+        assert!(sims_per_ply(with_share(0.5)) < 0.8 * sims_per_ply(with_share(1.0)));
+
+        let (_, games) = with_share(0.5);
+        let n_plies: usize = games.iter().map(|(record, _)| record.plies).sum();
+        let n_samples: usize = games.iter().map(|(_, samples)| samples.len()).sum();
+        assert!(
+            0 < n_samples && n_samples < n_plies,
+            "{n_samples} of {n_plies}"
+        );
+        // The samples' searches were full ones, 8 simulations with the first expanding the root
+        for (_, samples) in &games {
+            for sample in samples {
+                let total_visits: u16 = sample.visits.iter().map(|(_, n)| n).sum();
+                assert_eq!(total_visits, 7);
+            }
+        }
+        assert_eq!(with_share(0.5).1, games);
+
+        let (_, games) = with_share(0.0);
+        assert!(games.iter().all(|(_, samples)| samples.is_empty()));
     }
 
     #[test]
@@ -668,7 +756,7 @@ mod tests {
     #[test]
     fn results_are_for_the_side_to_move() {
         let results = |result| {
-            let mut game = Game::new(&MctsConfig::new(), 0);
+            let mut game = Game::new(&MctsConfig::new(), &SelfPlayConfig::new(), 0);
             for turn in [Color::White, Color::Black, Color::White] {
                 game.pending.push(PendingSample {
                     fen: String::new(),
@@ -730,7 +818,7 @@ mod tests {
 
     #[test]
     fn searches_alternate_between_the_networks() {
-        let mut game = Game::new(&MctsConfig::new(), 0);
+        let mut game = Game::new(&MctsConfig::new(), &SelfPlayConfig::new(), 0);
         assert_eq!(game.network_to_move(1), 1);
         game.ply = 1;
         assert_eq!(game.network_to_move(1), 0);

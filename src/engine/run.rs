@@ -55,6 +55,13 @@ pub(crate) struct RunConfig {
     /// Simulations per move in self-play
     #[config(default = 200)]
     pub(crate) n_sims: usize,
+    /// Playout cap randomization: the chance each move gets a full search of `n_sims`, which
+    /// becomes a training sample, rather than a fast one of `fast_sims` that only keeps the game
+    /// going. 1 searches every move in full.
+    #[config(default = 1.0)]
+    pub(crate) full_search_share: f64,
+    #[config(default = 50)]
+    pub(crate) fast_sims: usize,
     /// Games still going after this many plies are stopped and count as draws
     #[config(default = 512)]
     pub(crate) max_plies: usize,
@@ -264,6 +271,8 @@ pub(crate) fn train<P: Backend, T: AutodiffBackend>(
             .with_n_parallel(n_parallel)
             .with_n_games(usize::MAX)
             .with_max_plies(config.max_plies)
+            .with_full_search_share(config.full_search_share)
+            .with_fast_sims(config.fast_sims)
             .with_seed(seed),
     );
 

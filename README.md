@@ -61,7 +61,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
 - Many games run at once. Each step, every game's search advances to its next position needing the network, and all of those positions are evaluated in one batch on the GPU.
 - Moves are sampled by visit count for the first 30 plies, then chosen greedily. `--seed` fixes the untrained network's weights and seeds every game's own random generator, so runs with the same seed write the same samples, on the GPU as well.
 - Dirichlet noise (alpha 0.3, a quarter of each prior) is mixed into every search's root priors, so games explore moves the network rates low. A reused root gets fresh noise in its existing priors.
-- Every move played becomes a training sample, written out when its game ends.
+- Every move played becomes a training sample, written out when its game ends. A run can instead give each move a full search only by chance (`full_search_share` in its `config.json`), and a fast one of `fast_sims` visits otherwise, as KataGo's playout cap randomization does: then only the full searches become samples, and only they get root noise.
 
 **Training** (`src/engine/run.rs`, `src/engine/training.rs`)
 
