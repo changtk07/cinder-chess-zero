@@ -1,7 +1,9 @@
 mod bench;
 mod chess;
 mod engine;
+mod sync;
 
+use crate::sync::{pull_if_behind, Pusher, Remote};
 use crate::{
     chess::State,
     engine::{
@@ -28,12 +30,14 @@ Usage: cinder <command> [--backend cpu|cuda|cuda-f16|cuda-bf16]
 Commands:
   self-play [--parallel 512] [--sims 200] [--games 512] [--seed 0]
                       play games with untrained weights, reporting throughput
-  train <dir> [--parallel 512] [--generations N]
+  train <dir> [--parallel 512] [--generations N] [--no-sync]
                       play and train generation after generation in the run in dir,
                       creating it if needed. Stop it any time, then run the same
                       command, here or on another machine, to continue. Training runs
                       in f32; --backend sets self-play's precision. A new run also takes
-                      [--games 2048] [--sims 200] [--steps 1000] [--seed 0]
+                      [--games 2048] [--sims 200] [--steps 1000] [--seed 0], and
+                      [--sync remote] to keep a copy of itself there with rclone, such as
+                      gdrive:cinder-runs; --sync also fetches a run this machine lacks
   match <dir> <generation> <generation> [--games 128] [--sims 50] [--parallel 128]
                       play two of a run's kept networks against each other, and
                       report the first's score
@@ -130,6 +134,15 @@ fn take_model_config(args: &mut Vec<String>) -> TransformerModelConfig {
     config
 }
 
+// Removes `name` from `args`, returning whether it was there
+fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
+    let index = args.iter().position(|arg| arg == name);
+    if let Some(index) = index {
+        args.remove(index);
+    }
+    index.is_some()
+}
+
 // Takes the first argument, which must be there and not an option
 fn take_required<T: FromStr>(args: &mut Vec<String>, name: &str) -> T {
     match args.first() {
@@ -187,6 +200,31 @@ fn train<P: Backend, T: AutodiffBackend>(mut args: Vec<String>) {
     if n_parallel == 0 {
         usage_error("--parallel must be at least 1");
     }
+    let sync_to = take_option(&mut args, "--sync");
+    let no_sync = take_flag(&mut args, "--no-sync");
+
+    // The run's copy: where its settings keep it, or for a run this machine doesn't have yet,
+    // where --sync says to fetch it from or keep it
+    let sync_root = if Run::exists(&dir) {
+        if sync_to.is_some() {
+            usage_error(&format!(
+                "--sync is fixed when a run is created; edit {} to change it",
+                dir.join("config.json").display()
+            ));
+        }
+        Run::open(&dir)
+            .unwrap_or_else(|error| fail(&error))
+            .config
+            .sync_to
+    } else {
+        sync_to.clone()
+    };
+    let remote = sync_root
+        .filter(|_| !no_sync)
+        .map(|root| Remote::new(&["rclone"], &root, &dir).unwrap_or_else(|error| fail(&error)));
+    if let Some(remote) = &remote {
+        pull_if_behind(remote, &dir).unwrap_or_else(|error| fail(&error));
+    }
 
     let run = if Run::exists(&dir) {
         if let Some(option) = RUN_OPTIONS
@@ -208,6 +246,7 @@ fn train<P: Backend, T: AutodiffBackend>(mut args: Vec<String>) {
         config.steps_per_generation =
             take_parsed_option(&mut args, "--steps", config.steps_per_generation);
         config.seed = take_parsed_option(&mut args, "--seed", config.seed);
+        config.sync_to = sync_to;
         reject_leftovers(&args);
 
         if config.games_per_generation == 0 || config.steps_per_generation == 0 {
@@ -236,8 +275,33 @@ fn train<P: Backend, T: AutodiffBackend>(mut args: Vec<String>) {
         run.config.model.n_blocks,
         run.config.model.d_model()
     );
-    training_run::train::<P, T>(&run, n_parallel, n_generations, play_device, train_device)
-        .unwrap_or_else(|error| fail(&error));
+    let pusher = remote.map(|remote| {
+        println!(
+            "Syncing to {} after each checkpoint and when stopped",
+            remote.path()
+        );
+        let pusher = Pusher::start(remote, &dir);
+        pusher.push_on_stop().unwrap_or_else(|error| fail(&error));
+        pusher
+    });
+
+    let trained = training_run::train::<P, T>(
+        &run,
+        n_parallel,
+        n_generations,
+        play_device,
+        train_device,
+        |_| {
+            if let Some(pusher) = &pusher {
+                pusher.push_soon();
+            }
+        },
+    );
+    // Pushes what the run got done even if it failed
+    if let Some(pusher) = pusher {
+        pusher.finish();
+    }
+    trained.unwrap_or_else(|error| fail(&error));
 }
 
 fn play_match<B: Backend>(mut args: Vec<String>, device: &B::Device) {
