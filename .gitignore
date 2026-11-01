@@ -22,8 +22,5 @@ target/
 # Antigravity CLI
 .antigravitycli
 
-# Self-play training data
-/data/
-
 # Training runs
 /runs/

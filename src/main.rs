@@ -8,7 +8,6 @@ use crate::{
         mcts::MctsConfig,
         model::TransformerModelConfig,
         run::{self as training_run, Run, RunConfig},
-        samples::{RecordedGame, SampleWriter},
         self_play::{
             self as self_play_driver, progress_line, GameResult, SelfPlayConfig, SelfPlayStats,
         },
@@ -21,19 +20,14 @@ use burn::{
         bf16, f16,
     },
 };
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Instant,
-};
+use std::{path::PathBuf, str::FromStr, time::Instant};
 
 const USAGE: &str = "\
 Usage: cinder <command> [--backend cpu|cuda|cuda-f16|cuda-bf16]
 
 Commands:
-  self-play [--parallel 512] [--sims 800] [--games 512] [--seed 0] [--out file]
-                      play games with untrained weights, reporting throughput and
-                      appending each finished game's training samples to the file
+  self-play [--parallel 512] [--sims 200] [--games 512] [--seed 0]
+                      play games with untrained weights, reporting throughput
   train <dir> [--parallel 512] [--generations N]
                       play and train generation after generation in the run in dir,
                       creating it if needed. Stop it any time, then run the same
@@ -284,9 +278,8 @@ fn fail(error: &std::io::Error) -> ! {
 
 fn self_play<B: Backend>(mut args: Vec<String>, device: &B::Device) {
     let model_config = take_model_config(&mut args);
-    let out = take_option(&mut args, "--out");
     let n_parallel: usize = take_parsed_option(&mut args, "--parallel", 512);
-    let n_sims: usize = take_parsed_option(&mut args, "--sims", 800);
+    let n_sims: usize = take_parsed_option(&mut args, "--sims", 200);
     let n_games: usize = take_parsed_option(&mut args, "--games", 512);
     let seed: u64 = take_parsed_option(&mut args, "--seed", 0);
     reject_leftovers(&args);
@@ -299,13 +292,7 @@ fn self_play<B: Backend>(mut args: Vec<String>, device: &B::Device) {
         usage_error(&format!("--sims must be from 2 to {}", u16::MAX));
     }
 
-    let mut writer = out.as_deref().map(|path| {
-        SampleWriter::open(Path::new(path))
-            .unwrap_or_else(|error| panic!("can't write samples to {path}: {error}"))
-    });
-    let mut n_samples = 0;
-
-    // Until weights can be loaded from a file, the seed also fixes the random initial weights
+    // The seed fixes the untrained weights as well as the games
     B::seed(device, seed);
     let model = model_config.init::<B>(device);
     let mcts_config = MctsConfig::new().with_n_sims(n_sims);
@@ -328,18 +315,7 @@ fn self_play<B: Backend>(mut args: Vec<String>, device: &B::Device) {
         &mcts_config,
         &config,
         device,
-        |record, samples| {
-            if let Some(writer) = writer.as_mut() {
-                n_samples += samples.len();
-                let game = RecordedGame {
-                    generation: 0,
-                    white_result: record.result.for_white(),
-                    plies: record.plies as u16,
-                    samples,
-                };
-                writer.write_game(&game).expect("writing samples");
-            }
-        },
+        |_, _| {},
         |stats| {
             println!("{}", progress_line(stats, &previous));
             previous = stats.clone();
@@ -367,7 +343,4 @@ fn self_play<B: Backend>(mut args: Vec<String>, device: &B::Device) {
         "Overall: {}",
         progress_line(&stats, &SelfPlayStats::default())
     );
-    if let Some(path) = out {
-        println!("{n_samples} samples appended to {path}");
-    }
 }

@@ -76,7 +76,7 @@ pub(crate) struct MctsConfig {
     /// Visits the root reaches in each search. A fresh search's first simulation expands the root,
     /// so the root's moves get `n_sims - 1` visits in total. A search that reuses a subtree starts
     /// with its visits and only runs the simulations still missing.
-    #[config(default = 800)]
+    #[config(default = 200)]
     n_sims: usize,
 }
 
