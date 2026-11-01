@@ -53,6 +53,18 @@ pub(crate) enum GameResult {
     PlyLimit,
 }
 
+impl GameResult {
+    /// 1 if white won, 0 for a draw, -1 if black won. Games stopped at the ply limit count as
+    /// draws.
+    pub(crate) fn for_white(self) -> i8 {
+        match self {
+            Self::WhiteWins => 1,
+            Self::BlackWins => -1,
+            Self::Draw | Self::PlyLimit => 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GameRecord {
     pub(crate) result: GameResult,
@@ -219,21 +231,15 @@ impl Game {
 
     // Gives each position played the game's result for its side to move
     fn take_samples(&mut self, result: GameResult) -> Vec<Sample> {
-        let winner = match result {
-            GameResult::WhiteWins => Some(Color::White),
-            GameResult::BlackWins => Some(Color::Black),
-            GameResult::Draw | GameResult::PlyLimit => None,
-        };
-
+        let white_result = result.for_white();
         self.pending
             .drain(..)
             .map(|position| Sample {
                 fen: position.fen,
                 visits: position.visits,
-                result: match winner {
-                    None => 0,
-                    Some(color) if color == position.turn => 1,
-                    Some(_) => -1,
+                result: match position.turn {
+                    Color::White => white_result,
+                    Color::Black => -white_result,
                 },
             })
             .collect()

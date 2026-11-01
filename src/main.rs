@@ -8,7 +8,7 @@ use crate::{
         mcts::MctsConfig,
         model::TransformerModelConfig,
         run::{self as training_run, Run, RunConfig},
-        samples::{SampleWriter, UNTRAINED},
+        samples::{RecordedGame, SampleWriter},
         self_play::{
             self as self_play_driver, progress_line, GameResult, SelfPlayConfig, SelfPlayStats,
         },
@@ -328,12 +328,16 @@ fn self_play<B: Backend>(mut args: Vec<String>, device: &B::Device) {
         &mcts_config,
         &config,
         device,
-        |_, samples| {
+        |record, samples| {
             if let Some(writer) = writer.as_mut() {
-                writer
-                    .write_game(UNTRAINED, &samples)
-                    .expect("writing samples");
                 n_samples += samples.len();
+                let game = RecordedGame {
+                    generation: 0,
+                    white_result: record.result.for_white(),
+                    plies: record.plies as u16,
+                    samples,
+                };
+                writer.write_game(&game).expect("writing samples");
             }
         },
         |stats| {

@@ -25,7 +25,7 @@ use crate::engine::{
     mcts::MctsConfig,
     model::TransformerModel,
     model::TransformerModelConfig,
-    samples::{read_samples, Sample, SampleWriter},
+    samples::{read_samples, RecordedGame, Sample, SampleWriter},
     self_play::{play_match, progress_line, MatchScore, SelfPlay, SelfPlayConfig, SelfPlayStats},
     training::{load_model, remove_optimizer_state, Losses, Trainer},
 };
@@ -323,10 +323,14 @@ fn play_generation<P: Backend>(
         &model,
         n_games,
         device,
-        |_, samples| {
-            writer
-                .write_game(generation as u32, &samples)
-                .expect("writing samples");
+        |record, samples| {
+            let game = RecordedGame {
+                generation: generation as u32,
+                white_result: record.result.for_white(),
+                plies: u16::try_from(record.plies).expect("games are shorter than 65,536 plies"),
+                samples,
+            };
+            writer.write_game(&game).expect("writing samples");
         },
         |stats| {
             println!("{}", progress_line(stats, &previous));
@@ -383,7 +387,7 @@ fn train_generation<T: AutodiffBackend>(
         }
         for game in read_samples(&path)?.games {
             if window_generation == generation {
-                count_game(&mut games, &game.samples);
+                count_game(&mut games, &game);
             }
             samples.extend(game.samples);
         }
@@ -545,14 +549,13 @@ fn count_games(path: &Path) -> io::Result<usize> {
     }
 }
 
-// Games start from the initial position, so the first sample's result is white's
-fn count_game(counts: &mut GameCounts, samples: &[Sample]) {
-    match samples.first().map(|sample| sample.result) {
-        Some(1) => counts.white_wins += 1,
-        Some(-1) => counts.black_wins += 1,
+fn count_game(counts: &mut GameCounts, game: &RecordedGame) {
+    match game.white_result {
+        1 => counts.white_wins += 1,
+        -1 => counts.black_wins += 1,
         _ => counts.draws += 1,
     }
-    counts.plies += samples.len();
+    counts.plies += game.plies as usize;
 }
 
 fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
@@ -723,14 +726,19 @@ mod tests {
         // As if stopped during generation 0's second game: one game, then part of another
         let path = run.samples_path(0);
         let start = crate::chess::State::new();
-        let game = vec![Sample {
-            fen: start.to_fen(),
-            visits: start.generate_moves().iter().map(|&mv| (mv, 1)).collect(),
-            result: 0,
-        }];
+        let game = RecordedGame {
+            generation: 0,
+            white_result: 0,
+            plies: 1,
+            samples: vec![Sample {
+                fen: start.to_fen(),
+                visits: start.generate_moves().iter().map(|&mv| (mv, 1)).collect(),
+                result: 0,
+            }],
+        };
         let mut writer = SampleWriter::open(&path).unwrap();
-        writer.write_game(0, &game).unwrap();
-        writer.write_game(0, &game).unwrap();
+        writer.write_game(&game).unwrap();
+        writer.write_game(&game).unwrap();
         let len = fs::metadata(&path).unwrap().len();
         OpenOptions::new()
             .write(true)
@@ -746,10 +754,46 @@ mod tests {
 
         let file = read_samples(&path).unwrap();
         assert!(file.games.len() >= 3);
-        assert_eq!(file.games[0].samples, game);
+        assert_eq!(file.games[0], game);
         assert_eq!(file.truncated_bytes, 0);
         assert_eq!(checkpoints(&dir), ["00000", "00001"]);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn games_are_counted_from_their_records_not_their_samples() {
+        let mut counts = GameCounts::default();
+        // With searches in full only by chance, a game may have no samples, or start with black's
+        let no_samples = RecordedGame {
+            generation: 0,
+            white_result: -1,
+            plies: 30,
+            samples: vec![],
+        };
+        let after_e4 = crate::chess::State::from_fen(
+            "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+        );
+        let black_sample = RecordedGame {
+            generation: 0,
+            white_result: 1,
+            plies: 20,
+            samples: vec![Sample {
+                fen: after_e4.to_fen(),
+                visits: after_e4
+                    .generate_moves()
+                    .iter()
+                    .map(|&mv| (mv, 1))
+                    .collect(),
+                result: -1,
+            }],
+        };
+        count_game(&mut counts, &no_samples);
+        count_game(&mut counts, &black_sample);
+
+        assert_eq!(counts.white_wins, 1);
+        assert_eq!(counts.black_wins, 1);
+        assert_eq!(counts.draws, 0);
+        assert_eq!(counts.plies, 50);
     }
 
     #[test]
