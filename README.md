@@ -83,7 +83,7 @@ burn's wgpu backend isn't enabled: under WSL2 it finds no Vulkan adapter, so the
   - [x] Measure how many of each search's visits the chosen move's subtree holds: 36% with a network trained for ten generations, so reuse would play about 1.57× the games per hour (`docs/performance.md`, "Tree reuse").
   - [x] Self-play reuses the subtree, with fresh noise mixed into the reused root's priors, and `--sims` counts the root's total visits, so samples keep recording the same number of visits.
   - [x] Self-play finishes games about 1.55–1.8× as fast with reuse (`docs/performance.md`, "Tree reuse").
-  - Maybe: cache evaluations by Zobrist hash and halfmove clock, for positions reached again by other move orders.
+  - Maybe: cache evaluations by position and halfmove clock. 11–16% of evaluations repeat a position from the same game, 15–22% one from any game, so self-play would run about 1.1–1.25× as fast, at up to about 2 GB of memory unless the cache is bounded (`docs/performance.md`, "Evaluation cache").
 - [ ] Training:
   - [x] A training loop alternating self-play and training, with runs that stop at any point and continue on either machine.
   - [x] A throwaway run on the laptop: the network learns, and generation 10 beat generation 0 by 35 wins to 9, with 84 draws. Results and findings in [docs/training.md](docs/training.md).

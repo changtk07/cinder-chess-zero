@@ -159,6 +159,17 @@ Self-play now reuses the subtree this way. Both runs below start all 512 games a
 
 About 1.57× of that is the evaluations reuse saves. The rest is the run with reuse evaluating faster, about 47,100 positions a second against 41,800, which is within the desktop's run-to-run variation. Copying the subtrees raised the tree work from 3.1% to 4.3% of each step. Measure such comparisons on an idle GPU: a first run with reuse shared the GPU with a game and evaluated about 15× slower.
 
+### Evaluation cache
+
+How often self-play asks the network about a position it has already evaluated, which a cache of evaluations would answer instead. The network sees the board, the side to move, castling rights, the en passant file and the halfmove clock, so that's what has to match. Measured on 2026-11-01 with tree reuse, the same trained network and settings as above, over one generation of 512 games and 16.7 million evaluations:
+
+| repeats | over the generation | in its last 75 seconds |
+|---|---|---|
+| a position evaluated earlier in the same game | 11.1% | 16.2% |
+| a position evaluated earlier in any game | 15.4% | 21.9% |
+
+Repeats grow as games go on, from transpositions in long endgames, and openings repeat across games. A cache would save about 11–16% of evaluations kept per game, or 15–22% shared between games, so self-play would run about 1.1–1.25× as fast. Each entry holds a prior for every legal move as well as the value, about 150 bytes, so a cache per game for 512 games would grow to about 2 GB late in the games, and a shared one larger still; a size limit would lower these rates.
+
 ## CPU parallelism
 
 Tree work on one thread takes about 0.36 ms per 256-game step, against about 17 ms for the network. With rayon over 24 threads it took about 3.6 ms, and the network call itself rose from about 17.4 to 18.9 ms. Dispatching thousands of microsecond tasks costs more than it saves, and idle workers likely compete with the thread driving the GPU. Rayon was slower at every size tried, so the tree work is sequential.
