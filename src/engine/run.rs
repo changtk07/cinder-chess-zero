@@ -97,6 +97,9 @@ pub(crate) struct RunConfig {
     /// Fixes the initial weights, and with the generation, every game's random choices
     #[config(default = 0)]
     pub(crate) seed: u64,
+    /// An rclone path, such as `gdrive:cinder-runs`, to keep a copy of the run under, in a folder
+    /// named like its directory, so it can continue on another machine (see `src/sync.rs`)
+    pub(crate) sync_to: Option<String>,
 }
 
 pub(crate) struct Run {
@@ -159,15 +162,12 @@ impl Run {
 
     /// The generation of the latest checkpoint, whose network plays next.
     pub(crate) fn latest_generation(&self) -> io::Result<usize> {
-        let mut latest = None;
+        let mut names = vec![];
         for entry in fs::read_dir(self.dir.join("checkpoints"))? {
-            let name = entry?.file_name();
-            // Temporary directories of interrupted saves don't parse
-            if let Some(generation) = name.to_str().and_then(|name| name.parse().ok()) {
-                latest = latest.max(Some(generation));
-            }
+            names.push(entry?.file_name().to_string_lossy().into_owned());
         }
-        latest.ok_or_else(|| io::Error::other("the run has no checkpoints"))
+        latest_checkpoint(names.iter().map(String::as_str))
+            .ok_or_else(|| io::Error::other("the run has no checkpoints"))
     }
 
     /// Loads generation `generation`'s network, if its checkpoint is still kept.
@@ -192,9 +192,7 @@ impl Run {
     }
 
     fn samples_path(&self, generation: usize) -> PathBuf {
-        self.dir
-            .join("samples")
-            .join(format!("{generation:05}.bin"))
+        self.dir.join("samples").join(samples_file_name(generation))
     }
 
     // Writes the checkpoint under a temporary name and renames it, so a checkpoint either exists
@@ -232,6 +230,17 @@ impl Run {
     }
 }
 
+/// The latest generation among the names in a run's `checkpoints` directory. The temporary
+/// directories of interrupted saves don't count.
+pub(crate) fn latest_checkpoint<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<usize> {
+    names.into_iter().filter_map(|name| name.parse().ok()).max()
+}
+
+/// The name of a generation's file in a run's `samples` directory.
+pub(crate) fn samples_file_name(generation: usize) -> String {
+    format!("{generation:05}.bin")
+}
+
 // Replaces `defaults`' values with those in `saved`, object by object, keeping defaults that
 // `saved` lacks
 fn overlay(defaults: &mut serde_json::Value, saved: serde_json::Value) {
@@ -253,12 +262,14 @@ fn overlay(defaults: &mut serde_json::Value, saved: serde_json::Value) {
 /// Plays and trains `n_generations` generations, or until stopped if `None`: each generation's
 /// network plays its games on backend `P`, then trains on backend `T`, which should be full
 /// precision, to become the next generation. `n_parallel` sets how many games play at once.
+/// `on_checkpoint` gets each new generation once its checkpoint and history line are written.
 pub(crate) fn train<P: Backend, T: AutodiffBackend>(
     run: &Run,
     n_parallel: usize,
     n_generations: Option<usize>,
     play_device: &P::Device,
     train_device: &T::Device,
+    mut on_checkpoint: impl FnMut(usize),
 ) -> io::Result<()> {
     let config = &run.config;
     let first = run.latest_generation()?;
@@ -287,6 +298,7 @@ pub(crate) fn train<P: Backend, T: AutodiffBackend>(
         }
         append_history(run, &summary)?;
         generation += 1;
+        on_checkpoint(generation);
     }
 
     Ok(())
@@ -571,15 +583,14 @@ fn count_game(counts: &mut GameCounts, game: &RecordedGame) {
 
 fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
     let path = run.dir.join(HISTORY_FILE);
-    let is_new = !path.exists();
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    if is_new {
-        writeln!(
-            file,
+    // Each line goes in a single write, so a copy taken meanwhile holds whole lines
+    let mut lines = String::new();
+    if !path.exists() {
+        lines.push_str(
             "generation,games,white_wins,black_wins,draws,average_plies,\
              policy_loss,target_entropy,value_loss,result_entropy,\
-             eval_wins,eval_draws,eval_losses,eval_elo"
-        )?;
+             eval_wins,eval_draws,eval_losses,eval_elo\n",
+        );
     }
 
     let GenerationSummary {
@@ -599,9 +610,8 @@ fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
             score.elo()
         )
     });
-    writeln!(
-        file,
-        "{generation},{},{},{},{},{average_plies:.1},{:.4},{:.4},{:.4},{result_entropy:.4},{eval}",
+    lines.push_str(&format!(
+        "{generation},{},{},{},{},{average_plies:.1},{:.4},{:.4},{:.4},{result_entropy:.4},{eval}\n",
         games.total(),
         games.white_wins,
         games.black_wins,
@@ -609,7 +619,12 @@ fn append_history(run: &Run, summary: &GenerationSummary) -> io::Result<()> {
         losses.policy,
         losses.target_entropy,
         losses.value,
-    )?;
+    ));
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(lines.as_bytes())?;
 
     println!(
         "Generation {generation} done: {} white wins, {} black wins, {} draws, {average_plies:.0} \
@@ -667,9 +682,17 @@ mod tests {
             .with_keep_every(5)
     }
 
+    // Trains `n` generations, checking each is reported once its checkpoint exists
     fn train_generations(run: &Run, n: usize) {
         let device = Default::default();
-        train::<NdArray, T>(run, 2, Some(n), &device, &device).unwrap();
+        let first = run.latest_generation().unwrap();
+        let mut reported = vec![];
+        train::<NdArray, T>(run, 2, Some(n), &device, &device, |generation| {
+            assert_eq!(run.latest_generation().unwrap(), generation);
+            reported.push(generation);
+        })
+        .unwrap();
+        assert_eq!(reported, (first + 1..=first + n).collect::<Vec<_>>());
     }
 
     fn checkpoints(dir: &Path) -> Vec<String> {
