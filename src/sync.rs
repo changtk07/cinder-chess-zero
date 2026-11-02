@@ -20,7 +20,8 @@
 
 use crate::engine::run::{latest_checkpoint, samples_file_name};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -241,6 +242,16 @@ impl Shared {
     }
 }
 
+// Ends the process from the signal handler's thread while training may still be using the GPU.
+// `std::process::exit` would run the CUDA driver's exit handlers underneath the training thread,
+// whose next call then panics, so this skips them. Nothing is lost: runs write each file in a
+// single step, and the push has finished.
+fn exit_now(code: i32) -> ! {
+    let _ = io::stdout().flush();
+    // Safety: _exit only ends the process, without running anything else in it
+    unsafe { libc::_exit(code) }
+}
+
 impl Pusher {
     /// Starts a thread to push the run in `dir` to `remote` when asked.
     pub(crate) fn start(remote: Remote, dir: &Path) -> Self {
@@ -280,14 +291,14 @@ impl Pusher {
         let stopping = AtomicBool::new(false);
         ctrlc::set_handler(move || {
             if stopping.swap(true, Ordering::SeqCst) {
-                std::process::exit(130);
+                exit_now(130);
             }
             println!(
                 "\nStopping: syncing to {} first, or press Ctrl-C again to stop without waiting",
                 shared.remote.path
             );
             shared.push();
-            std::process::exit(130);
+            exit_now(130);
         })
         .map_err(io::Error::other)
     }
