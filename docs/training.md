@@ -175,6 +175,12 @@ A generation takes about 20 minutes on the laptop at full power: 18.5 minutes of
 | 65 | 674 | 694 | 680 | 182 | 2.113 | 1.610 | 0.468 | 1.099 |
 | 67 | 691 | 656 | 701 | 184 | 2.106 | 1.603 | 0.467 | 1.099 |
 | 69 | 668 | 680 | 700 | 182 | 2.106 | 1.597 | 0.465 | 1.098 |
+| 71 | 663 | 665 | 720 | 181 | 2.110 | 1.594 | 0.470 | 1.098 |
+| 73 | 642 | 715 | 691 | 183 | 2.111 | 1.593 | 0.471 | 1.098 |
+| 75 | 704 | 727 | 617 | 171 | 2.119 | 1.603 | 0.465 | 1.099 |
+| 77 | 689 | 732 | 627 | 190 | 2.106 | 1.594 | 0.478 | 1.098 |
+| 78 | 713 | 713 | 622 | 187 | 2.093 | 1.583 | 0.469 | 1.098 |
+| 79 | 783 | 706 | 559 | 187 | 2.079 | 1.565 | 0.460 | 1.098 |
 
 Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 61 wins, 65 draws (11 at the ply limit) and 2 losses, a score of 0.730 or +173 Elo, close to the playout cap trial's +206 for its generation 8. Against an untrained network the score will soon saturate, so later references play the one before.
 
@@ -187,5 +193,8 @@ Generation 10 against generation 0, 128 games at 50 simulations per move without
 | 50 against 40 | 256 | 87 | 144 | 25 | 0.621 | +86 | +5.9 |
 | 60 against 50 | 256 | 103 | 124 | 29 | 0.645 | +103 | +6.4 |
 | 70 against 60 | 256 | 79 | 141 | 36 | 0.584 | +59 | +4.0 |
+| 80 against 70 | 256 | 78 | 145 | 33 | 0.588 | +62 | +4.3 |
 
-All at 50 simulations per move without root noise, each match's Elo uncertain by about ±15. After the first ten generations, each ten gained 55–103 Elo, so generation 70 is roughly 600 Elo above generation 0, though chaining adds up each match's error. At generation 70 the run directory took 1.1 GB, growing by about 15 MB a generation. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly. From 20 to 30 the draws fell to 45–53% and games lengthened to about 170 plies, with the policy loss falling faster again, and progress didn't slow: 20 to 30 gained a little more than 10 to 20. From 30 to 40, draws stayed at 45–52% and games at about 175 plies, and the value loss fell to its lowest share of the results' entropy, 52%. From generation 41 the draws dropped to 38–42% and stayed there, both losses fell faster, and 40 to 50 was the largest gain since the first ten generations. From 50 to 60 the draws kept falling, to 33–38%, with games lengthening to about 180 plies, the value loss under half the results' entropy, and a larger gain again. From 61 to 69 everything held still: draws at 33–36%, games at about 183 plies, the policy loss at 2.11 against targets' entropy of 1.60, and the value loss barely moving. 60 to 70 gained +59, down from +103, a drop of about two standard deviations, so progress has probably slowed at the constant learning rate of 3e-4.
+All at 50 simulations per move without root noise, each match's Elo uncertain by about ±15. After the first ten generations, each ten gained 55–103 Elo, so generation 80 is roughly 670 Elo above generation 0, though chaining adds up each match's error. At generation 80 the run directory took 1.2 GB, growing by about 15 MB a generation.
+
+The run was stopped after generation 74's training and continued from checkpoint 75 to 80 at `13d3178`, whose only change stops a run without a CUDA panic on exit. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly. From 20 to 30 the draws fell to 45–53% and games lengthened to about 170 plies, with the policy loss falling faster again, and progress didn't slow: 20 to 30 gained a little more than 10 to 20. From 30 to 40, draws stayed at 45–52% and games at about 175 plies, and the value loss fell to its lowest share of the results' entropy, 52%. From generation 41 the draws dropped to 38–42% and stayed there, both losses fell faster, and 40 to 50 was the largest gain since the first ten generations. From 50 to 60 the draws kept falling, to 33–38%, with games lengthening to about 180 plies, the value loss under half the results' entropy, and a larger gain again. From 61 to 69 everything held still: draws at 33–36%, games at about 183 plies, the policy loss at 2.11 against targets' entropy of 1.60, and the value loss barely moving. 60 to 70 gained +59, down from +103, a drop of about two standard deviations, so progress has probably slowed at the constant learning rate of 3e-4. From 75 on, draws fell to 27–32% and both losses started falling again by generation 79, and 70 to 80 gained +62, about the same as 60 to 70.
