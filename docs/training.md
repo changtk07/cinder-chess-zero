@@ -153,6 +153,12 @@ A generation takes about 20 minutes on the laptop at full power: 18.5 minutes of
 | 26 | 529 | 509 | 1,010 | 170 | 2.519 | 1.993 | 0.589 | 0.972 |
 | 28 | 483 | 521 | 1,044 | 177 | 2.476 | 1.951 | 0.581 | 0.979 |
 | 29 | 581 | 472 | 995 | 169 | 2.473 | 1.952 | 0.579 | 0.990 |
+| 30 | 548 | 480 | 1,020 | 175 | 2.465 | 1.952 | 0.569 | 0.991 |
+| 32 | 562 | 568 | 918 | 171 | 2.442 | 1.930 | 0.569 | 1.012 |
+| 34 | 526 | 521 | 1,001 | 168 | 2.432 | 1.917 | 0.567 | 1.021 |
+| 36 | 543 | 514 | 991 | 175 | 2.418 | 1.902 | 0.557 | 1.029 |
+| 38 | 576 | 507 | 965 | 173 | 2.405 | 1.886 | 0.541 | 1.032 |
+| 39 | 589 | 488 | 971 | 177 | 2.396 | 1.874 | 0.538 | 1.034 |
 
 Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 61 wins, 65 draws (11 at the ply limit) and 2 losses, a score of 0.730 or +173 Elo, close to the playout cap trial's +206 for its generation 8. Against an untrained network the score will soon saturate, so later references play the one before.
 
@@ -161,5 +167,6 @@ Generation 10 against generation 0, 128 games at 50 simulations per move without
 | 10 against 0 | 128 | 61 | 65 | 2 | 0.730 | +173 | +10.4 standard deviations |
 | 20 against 10 | 256 | 68 | 160 | 28 | 0.578 | +55 | +4.1 |
 | 30 against 20 | 256 | 76 | 154 | 26 | 0.598 | +69 | +5.0 |
+| 40 against 30 | 256 | 70 | 161 | 25 | 0.588 | +62 | +4.6 |
 
-All at 50 simulations per move without root noise. Chained, generation 30 is roughly 300 Elo above generation 0, though chaining adds up each match's error. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly. From 20 to 30 the draws fell to 45–53% and games lengthened to about 170 plies, with the policy loss falling faster again, and progress didn't slow: 20 to 30 gained a little more than 10 to 20.
+All at 50 simulations per move without root noise. After the first ten generations, each ten have gained about 60 Elo, so generation 40 is roughly 360 Elo above generation 0, though chaining adds up each match's error. At generation 40 the run directory took 649 MB, growing by about 15 MB a generation. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly. From 20 to 30 the draws fell to 45–53% and games lengthened to about 170 plies, with the policy loss falling faster again, and progress didn't slow: 20 to 30 gained a little more than 10 to 20. From 30 to 40, draws stayed at 45–52% and games at about 175 plies, and the value loss fell to its lowest share of the results' entropy, 52%.
