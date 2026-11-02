@@ -147,6 +147,12 @@ A generation takes about 20 minutes on the laptop at full power: 18.5 minutes of
 | 16 | 508 | 448 | 1,092 | 159 | 2.610 | 2.165 | 0.535 | 0.869 |
 | 18 | 477 | 454 | 1,117 | 162 | 2.601 | 2.141 | 0.521 | 0.846 |
 | 19 | 504 | 449 | 1,095 | 158 | 2.598 | 2.137 | 0.535 | 0.864 |
+| 20 | 477 | 485 | 1,086 | 160 | 2.605 | 2.146 | 0.552 | 0.874 |
+| 22 | 578 | 540 | 930 | 161 | 2.585 | 2.103 | 0.599 | 0.943 |
+| 24 | 552 | 550 | 946 | 168 | 2.557 | 2.054 | 0.596 | 0.968 |
+| 26 | 529 | 509 | 1,010 | 170 | 2.519 | 1.993 | 0.589 | 0.972 |
+| 28 | 483 | 521 | 1,044 | 177 | 2.476 | 1.951 | 0.581 | 0.979 |
+| 29 | 581 | 472 | 995 | 169 | 2.473 | 1.952 | 0.579 | 0.990 |
 
 Generation 10 against generation 0, 128 games at 50 simulations per move without root noise: 61 wins, 65 draws (11 at the ply limit) and 2 losses, a score of 0.730 or +173 Elo, close to the playout cap trial's +206 for its generation 8. Against an untrained network the score will soon saturate, so later references play the one before.
 
@@ -154,5 +160,6 @@ Generation 10 against generation 0, 128 games at 50 simulations per move without
 |---|---|---|---|---|---|---|---|
 | 10 against 0 | 128 | 61 | 65 | 2 | 0.730 | +173 | +10.4 standard deviations |
 | 20 against 10 | 256 | 68 | 160 | 28 | 0.578 | +55 | +4.1 |
+| 30 against 20 | 256 | 76 | 154 | 26 | 0.598 | +69 | +5.0 |
 
-All at 50 simulations per move without root noise. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly and white won a little more often than black.
+All at 50 simulations per move without root noise. Chained, generation 30 is roughly 300 Elo above generation 0, though chaining adds up each match's error. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly. From 20 to 30 the draws fell to 45–53% and games lengthened to about 170 plies, with the policy loss falling faster again, and progress didn't slow: 20 to 30 gained a little more than 10 to 20.
