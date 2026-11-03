@@ -198,3 +198,20 @@ Generation 10 against generation 0, 128 games at 50 simulations per move without
 All at 50 simulations per move without root noise, each match's Elo uncertain by about ±15. After the first ten generations, each ten gained 55–103 Elo, so generation 80 is roughly 670 Elo above generation 0, though chaining adds up each match's error. At generation 80 the run directory took 1.2 GB, growing by about 15 MB a generation.
 
 The run was stopped after generation 74's training and continued from checkpoint 75 to 80 at `13d3178`, whose only change stops a run without a CUDA panic on exit. From generation 10 to 20 the draw rate held at 52–59% and games at about 155 plies, while the policy loss kept falling slowly. From 20 to 30 the draws fell to 45–53% and games lengthened to about 170 plies, with the policy loss falling faster again, and progress didn't slow: 20 to 30 gained a little more than 10 to 20. From 30 to 40, draws stayed at 45–52% and games at about 175 plies, and the value loss fell to its lowest share of the results' entropy, 52%. From generation 41 the draws dropped to 38–42% and stayed there, both losses fell faster, and 40 to 50 was the largest gain since the first ten generations. From 50 to 60 the draws kept falling, to 33–38%, with games lengthening to about 180 plies, the value loss under half the results' entropy, and a larger gain again. From 61 to 69 everything held still: draws at 33–36%, games at about 183 plies, the policy loss at 2.11 against targets' entropy of 1.60, and the value loss barely moving. 60 to 70 gained +59, down from +103, a drop of about two standard deviations, so progress has probably slowed at the constant learning rate of 3e-4. From 75 on, draws fell to 27–32% and both losses started falling again by generation 79, and 70 to 80 gained +62, about the same as 60 to 70.
+
+### A lower learning rate, from generation 80
+
+Run on 2026-11-03 at `abf3d0d`, on the laptop. With losses flat from generation 61 to 75 and 60 to 70 gaining less than 50 to 60, the run was copied at checkpoint 80 to `runs/long-lr1e-4`, outside git and not synced, with only the learning rate changed from 3e-4 to 1e-4. Both trained 10 generations side by side, from the same seed, so generation 80's games were the same in both.
+
+| generation | 3e-4 draws | 3e-4 policy loss | 3e-4 value loss | 1e-4 draws | 1e-4 policy loss | 1e-4 value loss |
+|---|---|---|---|---|---|---|
+| 81 | 29% | 2.066 | 0.468 | 25% | 2.047 | 0.467 |
+| 83 | 27% | 2.046 | 0.463 | 26% | 2.017 | 0.478 |
+| 85 | 31% | 2.021 | 0.458 | 25% | 1.989 | 0.468 |
+| 87 | 28% | 2.022 | 0.459 | 26% | 1.990 | 0.474 |
+| 89 | 28% | 2.035 | 0.454 | 25% | 1.995 | 0.483 |
+
+The two generation 90 networks against each other, 512 games at 50 simulations per move without root noise: 1e-4 won 128, drew 274 and lost 110, a score of 0.518 or +12 Elo, 1.2 standard deviations from an even split in decisive games.
+
+- **The lower learning rate made no clear difference in ten generations.** Its policy loss fell about 0.04 further and its games drew a little less, but its value loss rose, and head to head it was within chance of the 3e-4 network.
+- So the run continues at 3e-4 from `runs/long`'s checkpoint 90. A decay is worth trying again once the ten-generation matches stop showing gains.
