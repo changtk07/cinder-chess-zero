@@ -235,6 +235,27 @@ impl Search {
         self.backup(state, evaluation.value);
     }
 
+    /// The root's value for its side to move, averaged over the search: -1 a loss, 1 a win.
+    pub(crate) fn root_value(&self) -> f32 {
+        self.nodes[0].q_val()
+    }
+
+    /// The line the search expects: from the root, the most visited move at each step, as far as
+    /// moves have visits.
+    pub(crate) fn principal_variation(&self) -> Vec<Move> {
+        let mut line = vec![];
+        let mut node = 0;
+        while let Some(best) = self.nodes[node]
+            .children()
+            .filter(|&i| self.nodes[i].n_visits > 0)
+            .max_by_key(|&i| self.nodes[i].n_visits)
+        {
+            line.push(self.nodes[best].mv.unwrap());
+            node = best;
+        }
+        line
+    }
+
     pub(crate) fn result(&self) -> SearchResult {
         let root = &self.nodes[0];
         SearchResult {
@@ -447,6 +468,30 @@ mod tests {
         assert_eq!(state.to_string(), root);
         let total_visits: usize = search.result().visits.iter().map(|(_, n)| n).sum();
         assert_eq!(total_visits, n_sims - 1);
+    }
+
+    #[test]
+    fn the_principal_variation_follows_the_most_visited_moves() {
+        let mut state = State::from_fen("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1");
+        let mut search = Search::new(MctsConfig::new().with_n_sims(400));
+        let model = tiny_model();
+        while search.next_leaf(&mut state) {
+            let evaluation = model
+                .evaluate(&[&state], &[search.leaf_moves()], &Default::default())
+                .remove(0);
+            search.apply(&mut state, evaluation);
+        }
+
+        // The mate in one gets the most visits, and ends the line
+        let line = search.principal_variation();
+        assert_eq!(
+            line.first().map(|mv| mv.to_string()),
+            Some("a1a8".to_string())
+        );
+        assert_eq!(line.len(), 1);
+        assert_eq!(Some(line[0]), search.result().best_move());
+        // and the side to move is winning
+        assert!(search.root_value() > 0.5);
     }
 
     #[test]

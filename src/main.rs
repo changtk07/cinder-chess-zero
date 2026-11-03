@@ -2,6 +2,7 @@ mod bench;
 mod chess;
 mod engine;
 mod sync;
+mod uci;
 
 use crate::sync::{pull_if_behind, Pusher, Remote};
 use crate::{
@@ -41,6 +42,9 @@ Commands:
   match <dir> <generation> <generation> [--games 128] [--sims 50] [--parallel 128]
                       play two of a run's kept networks against each other, and
                       report the first's score
+  uci <dir> <generation> [--sims 800]
+                      play one of a run's kept networks over the UCI protocol, for chess
+                      GUIs; a go without limits searches --sims simulations
   bench [max_batch]   network throughput by batch size, then search speed
   perft [depth]       count positions from the start, per root move
 
@@ -98,6 +102,7 @@ fn run<B: Backend>(mut args: Vec<String>, device: &B::Device) {
         }
         "self-play" => self_play::<B>(args, device),
         "match" => play_match::<B>(args, device),
+        "uci" => play_uci::<B>(args, device),
         other => usage_error(&format!("unknown command {other}")),
     }
 }
@@ -339,6 +344,33 @@ fn play_match<B: Backend>(mut args: Vec<String>, device: &B::Device) {
         score.average_plies(),
         start.elapsed().as_secs_f64()
     );
+}
+
+fn play_uci<B: Backend>(mut args: Vec<String>, device: &B::Device) {
+    let dir: PathBuf = take_required(&mut args, "run directory");
+    let generation: usize = take_required(&mut args, "generation");
+    let n_sims: usize = take_parsed_option(&mut args, "--sims", 800);
+    reject_leftovers(&args);
+    if n_sims < 2 {
+        usage_error("--sims must be at least 2");
+    }
+
+    let run = Run::open(&dir).unwrap_or_else(|error| fail(&error));
+    let model = run
+        .load_network::<B>(generation, device)
+        .unwrap_or_else(|error| fail(&error));
+
+    // Lines go through a channel, so searches can take `stop` while they run
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    uci::run(&model, n_sims, device, receiver, std::io::stdout().lock())
+        .unwrap_or_else(|error| fail(&error));
 }
 
 fn fail(error: &std::io::Error) -> ! {
