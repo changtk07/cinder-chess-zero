@@ -74,11 +74,12 @@ impl std::fmt::Display for Move {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (from, to, mv_type) = self.unpack();
         write!(f, "{}{}", from, to)?;
+        // UCI notation, as in a7a8q
         match mv_type {
-            MoveType::PromotionQueen => write!(f, "=q"),
-            MoveType::PromotionRook => write!(f, "=r"),
-            MoveType::PromotionBishop => write!(f, "=b"),
-            MoveType::PromotionKnight => write!(f, "=n"),
+            MoveType::PromotionQueen => write!(f, "q"),
+            MoveType::PromotionRook => write!(f, "r"),
+            MoveType::PromotionBishop => write!(f, "b"),
+            MoveType::PromotionKnight => write!(f, "n"),
             _ => Ok(()),
         }
     }

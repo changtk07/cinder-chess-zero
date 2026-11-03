@@ -44,6 +44,125 @@ impl State {
         Self::from_fen(START_FEN)
     }
 
+    /// Parses a position given from outside, such as by a chess GUI, rejecting any that is
+    /// malformed or impossible. The halfmove clock and fullmove number may be left out.
+    pub(crate) fn parse_fen(fen: &str) -> Result<Self, String> {
+        let mut fields: Vec<&str> = fen.split_whitespace().collect();
+        if fields.len() == 4 {
+            fields.extend(["0", "1"]);
+        }
+        let &[board, turn, castling, en_passant, halfmove, fullmove] = fields.as_slice() else {
+            return Err(format!("a FEN has 4 or 6 fields, not {}", fields.len()));
+        };
+
+        let ranks: Vec<&str> = board.split('/').collect();
+        if ranks.len() != 8 {
+            return Err(format!("the board has 8 ranks, not {}", ranks.len()));
+        }
+        for (i, rank) in ranks.iter().enumerate() {
+            let mut files = 0;
+            for c in rank.chars() {
+                match c {
+                    '1'..='8' => files += c.to_digit(10).unwrap(),
+                    'P' | 'N' | 'B' | 'R' | 'Q' | 'K' | 'p' | 'n' | 'b' | 'r' | 'q' | 'k' => {
+                        if (i == 0 || i == 7) && c.eq_ignore_ascii_case(&'p') {
+                            return Err(format!("a pawn on rank {}", 8 - i));
+                        }
+                        files += 1
+                    }
+                    _ => return Err(format!("{c:?} isn't a piece or a count of empty squares")),
+                }
+            }
+            if files != 8 {
+                return Err(format!("rank {} has {files} squares, not 8", 8 - i));
+            }
+        }
+        for king in ['K', 'k'] {
+            let count = board.chars().filter(|&c| c == king).count();
+            if count != 1 {
+                return Err(format!("{count} {king} kings, not 1"));
+            }
+        }
+
+        if turn != "w" && turn != "b" {
+            return Err(format!("the side to move is w or b, not {turn:?}"));
+        }
+        let castling_ok = castling == "-"
+            || (!castling.is_empty()
+                && castling.chars().all(|c| "KQkq".contains(c))
+                && castling.chars().all(|c| castling.matches(c).count() == 1));
+        if !castling_ok {
+            return Err(format!(
+                "castling rights are - or some of KQkq, not {castling:?}"
+            ));
+        }
+        let en_passant_rank = if turn == "w" { b'6' } else { b'3' };
+        if en_passant != "-"
+            && (Position::from_fen(en_passant).is_none()
+                || en_passant.as_bytes()[1] != en_passant_rank)
+        {
+            return Err(format!("{en_passant:?} can't be an en passant square here"));
+        }
+        let halfmove_clock: usize = halfmove
+            .parse()
+            .map_err(|_| format!("the halfmove clock is a count, not {halfmove:?}"))?;
+        let fullmove_number: usize = fullmove
+            .parse()
+            .ok()
+            .filter(|&n| n >= 1)
+            .ok_or_else(|| format!("the fullmove number counts from 1, not {fullmove:?}"))?;
+
+        let state = Self::from_fen(&format!(
+            "{board} {turn} {castling} {en_passant} {halfmove_clock} {fullmove_number}"
+        ));
+        // Each right needs its king and rook still on their squares, or castling would move
+        // pieces that aren't there
+        for (right, king, rook, name) in [
+            (
+                CastlingRights::KING_SIDE[Color::White],
+                Position::E1,
+                Position::H1,
+                'K',
+            ),
+            (
+                CastlingRights::QUEEN_SIDE[Color::White],
+                Position::E1,
+                Position::A1,
+                'Q',
+            ),
+            (
+                CastlingRights::KING_SIDE[Color::Black],
+                Position::E8,
+                Position::H8,
+                'k',
+            ),
+            (
+                CastlingRights::QUEEN_SIDE[Color::Black],
+                Position::E8,
+                Position::A8,
+                'q',
+            ),
+        ] {
+            let color = if name.is_ascii_uppercase() {
+                Color::White
+            } else {
+                Color::Black
+            };
+            if state.castling_rights.has(right)
+                && (state.board.mailbox[king] != Some(Piece::king(color))
+                    || state.board.mailbox[rook] != Some(Piece::rook(color)))
+            {
+                return Err(format!(
+                    "castling right {name} without its king and rook at home"
+                ));
+            }
+        }
+        if state.board.move_gen_masks(state.turn.flip()).check_mask != Bitmask::FULL {
+            return Err("the side not to move is in check".to_string());
+        }
+        Ok(state)
+    }
+
     pub(crate) fn from_fen(fen: &str) -> Self {
         let parts: ArrayVec<&str, 6> = fen.split_whitespace().collect();
         let mut state = Self {
@@ -607,6 +726,72 @@ mod tests {
                 .find(|mv| mv.to_string() == *uci)
                 .unwrap_or_else(|| panic!("illegal move {uci}"));
             state.make_move(mv);
+        }
+    }
+
+    #[test]
+    fn valid_positions_parse_like_trusted_ones() {
+        for fen in [
+            START_FEN,
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 3",
+            "8/8/8/8/8/8/8/K6k w - - 99 120",
+        ] {
+            assert_eq!(
+                State::parse_fen(fen).unwrap().to_fen(),
+                State::from_fen(fen).to_fen()
+            );
+        }
+        let short = State::parse_fen("8/8/8/8/8/8/8/K6k b - -").unwrap();
+        assert_eq!(short.to_fen(), "8/8/8/8/8/8/8/K6k b - - 0 1");
+    }
+
+    #[test]
+    fn impossible_or_malformed_positions_are_rejected() {
+        for (fen, why) in [
+            ("8/8/8/8/8/8/8/K6k w -", "4 or 6 fields"),
+            ("8/8/8/8/8/8/K6k w - - 0 1", "8 ranks"),
+            ("8/8/8/8/8/8/8/K5k w - - 0 1", "rank 1 has 7"),
+            ("8/8/8/8/8/8/8/K6kx w - - 0 1", "'x'"),
+            ("8/8/8/8/8/8/8/K6é w - - 0 1", "'é'"),
+            ("8/8/8/8/8/8/8/KK5k w - - 0 1", "2 K kings"),
+            ("8/8/8/8/8/8/8/K7 w - - 0 1", "0 k kings"),
+            ("P7/8/8/8/8/8/8/K6k w - - 0 1", "a pawn on rank 8"),
+            ("8/8/8/8/8/8/8/K6k x - - 0 1", "w or b"),
+            ("8/8/8/8/8/8/8/K6k w KK - 0 1", "some of KQkq"),
+            ("8/8/8/8/8/8/8/K6k w K - 0 1", "castling right K"),
+            ("8/8/8/8/8/8/8/K6k w - e3 0 1", "en passant"),
+            ("8/8/8/8/8/8/8/K6k w - A1 0 1", "en passant"),
+            ("8/8/8/8/8/8/8/K6k w - - x 1", "halfmove clock"),
+            ("8/8/8/8/8/8/8/K6k w - - 0 0", "fullmove number"),
+            (
+                "8/8/8/8/8/8/8/K5Rk w - - 0 1",
+                "side not to move is in check",
+            ),
+        ] {
+            let error = State::parse_fen(fen).map(|_| ()).unwrap_err();
+            assert!(error.contains(why), "{fen}: {error}");
+        }
+    }
+
+    #[test]
+    fn malformed_squares_are_not_squares() {
+        for square in ["e9", "i1", "A1", "e", "e44", "é", ""] {
+            assert!(Position::from_fen(square).is_none(), "{square}");
+        }
+        assert_eq!(Position::from_fen("h8"), Some(Position::H8));
+    }
+
+    #[test]
+    fn promotions_print_in_uci_notation() {
+        let state = State::from_fen("8/P7/8/8/8/8/8/K6k w - - 0 1");
+        let moves: Vec<String> = state
+            .generate_moves()
+            .iter()
+            .map(|mv| mv.to_string())
+            .collect();
+        for promotion in ["a7a8q", "a7a8r", "a7a8b", "a7a8n"] {
+            assert!(moves.contains(&promotion.to_string()), "{moves:?}");
         }
     }
 

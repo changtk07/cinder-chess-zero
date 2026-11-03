@@ -1,5 +1,4 @@
 use crate::chess::bitmask::Bitmask;
-use arrayvec::ArrayVec;
 use std::ops::{Index, IndexMut};
 
 #[repr(u8)]
@@ -169,18 +168,14 @@ impl Position {
     pub(crate) const KS_CASTLE_ROOK: [(Self, Self); 2] =
         [(Self::H1, Self::F1), (Self::H8, Self::F8)];
 
+    /// The square named like `e4`, or None for anything else.
     pub(crate) fn from_fen(fen: &str) -> Option<Self> {
-        if fen.len() != 2 {
+        let &[file, rank] = fen.as_bytes() else {
             return None;
-        }
-        let chars: ArrayVec<char, 2> = fen.chars().collect();
-        let file = chars[0] as u8 - b'a';
-        let rank = chars[1] as u8 - b'1';
-        if file >= 8 || rank >= 8 {
-            None
-        } else {
-            Some(Self(rank * 8 + file))
-        }
+        };
+        let file = file.checked_sub(b'a').filter(|&file| file < 8)?;
+        let rank = rank.checked_sub(b'1').filter(|&rank| rank < 8)?;
+        Some(Self(rank * 8 + file))
     }
 
     pub(crate) const fn middle_of(a: Self, b: Self) -> Self {
