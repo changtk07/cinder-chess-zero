@@ -24,7 +24,7 @@ use std::{
     io::{self, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Condvar, Mutex,
@@ -52,6 +52,8 @@ pub(crate) struct Remote {
     // The program to run and any arguments before rclone's own
     rclone: Vec<String>,
     path: String,
+    // The process id of the rclone running for this copy, if any, so a stop can end it
+    running: Mutex<Option<u32>>,
 }
 
 impl Remote {
@@ -67,6 +69,7 @@ impl Remote {
         Ok(Self {
             rclone: rclone.iter().map(|arg| arg.to_string()).collect(),
             path: format!("{}/{name}", root.trim_end_matches('/')),
+            running: Mutex::new(None),
         })
     }
 
@@ -126,12 +129,14 @@ impl Remote {
     }
 
     fn run(&self, args: &[&str]) -> io::Result<Output> {
-        Command::new(&self.rclone[0])
+        let child = Command::new(&self.rclone[0])
             .args(&self.rclone[1..])
             .args(args)
             // A process group of its own, so a Ctrl-C meant for training doesn't cut a push short
             .process_group(0)
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -141,7 +146,20 @@ impl Remote {
                         self.rclone.join(" ")
                     ),
                 )
-            })
+            })?;
+        *self.running.lock().unwrap() = Some(child.id());
+        let output = child.wait_with_output();
+        *self.running.lock().unwrap() = None;
+        output
+    }
+
+    // Ends the rclone running for this copy, if any, with anything it started: rclone leads a
+    // process group of its own
+    fn stop_running(&self) {
+        if let Some(pid) = *self.running.lock().unwrap() {
+            // Safety: kill only sends a signal, here to the group of a process this one started
+            unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+        }
     }
 
     fn check(&self, output: &Output) -> io::Result<()> {
@@ -289,16 +307,22 @@ impl Pusher {
     pub(crate) fn push_on_stop(&self) -> io::Result<()> {
         let shared = self.shared.clone();
         let stopping = AtomicBool::new(false);
+        // The handler runs on one thread that takes signals one at a time, so the final push runs
+        // on a thread of its own, leaving the handler free for a second signal
         ctrlc::set_handler(move || {
             if stopping.swap(true, Ordering::SeqCst) {
+                shared.remote.stop_running();
                 exit_now(130);
             }
             println!(
                 "\nStopping: syncing to {} first, or press Ctrl-C again to stop without waiting",
                 shared.remote.path
             );
-            shared.push();
-            exit_now(130);
+            let shared = shared.clone();
+            thread::spawn(move || {
+                shared.push();
+                exit_now(130);
+            });
         })
         .map_err(io::Error::other)
     }
