@@ -16,6 +16,11 @@
 //! uploads an append-only file at the size it first saw, and a game cut off there is removed when
 //! the run continues, like one cut off by a killed process.
 //!
+//! A push also deletes from the copy what the run has deleted, mostly the checkpoints it no longer
+//! keeps, about 54 MB a generation. Google Drive would move those to its trash, where they count
+//! against the account's storage for 30 days and fill it within weeks, so pushes pass
+//! `--drive-use-trash=false` to delete them outright. rclone ignores the flag for other remotes.
+//!
 //! Only one machine should train a run at a time: the copy follows whichever pushed last.
 
 use crate::engine::run::{latest_checkpoint, samples_file_name};
@@ -118,6 +123,7 @@ impl Remote {
             "--exclude",
             EXCLUDE,
             "--local-no-check-updated",
+            "--drive-use-trash=false",
         ])?;
         self.check(&output)
     }
@@ -524,7 +530,8 @@ esac
         assert_eq!(syncs.len(), 2, "{syncs:?}");
         assert!(syncs
             .iter()
-            .all(|sync| sync.contains("--local-no-check-updated")));
+            .all(|sync| sync.contains("--local-no-check-updated")
+                && sync.contains("--drive-use-trash=false")));
         let remote = local_progress(&fixture.remote_dir()).unwrap().unwrap();
         assert_eq!(remote.samples_bytes, 20);
     }
