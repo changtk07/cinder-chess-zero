@@ -95,7 +95,11 @@ burn's wgpu backend isn't enabled, so the GPU path is CUDA.
   - [x] Make playout cap randomization the run default: a quarter of moves in full and 2,048 games per generation.
   - [x] Runs that keep a copy of themselves in a remote folder with rclone (`--sync`), pulling it when another machine got further and pushing after each checkpoint and when stopped.
   - [ ] A long run.
-- [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws.
+- [ ] Once the network is trained, score unvisited moves with first-play urgency (the parent's value minus a reduction, as Leela does) instead of as draws. Scored as draws, they look worse than every move tried so far whenever the side to move is winning, so a winning search barely looks past the network's favourites.
+- [ ] Recognise forced mates in the search: mark a move as won once every reply to it loses to mate, and play it. Generation 130, given a queen, a rook and four pawns against two pawns and 400 simulations a move, against Stockfish's defence, had a mate in two or three on the board for 15 moves running without playing one, and gave a queen away twice: with its value near +1 whatever it played, the search had no reason to prefer the mate. It mated a lone king with a queen or a rook in about twice the moves needed.
+- [ ] Prefer shorter wins with a moves-left head, as Leela does: a third output predicting how many moves the game has left, which the search uses to favour quicker wins and slower losses. Unlike recognising forced mates, it also covers wins too long for the search to see, but it changes the network and its training targets.
+- Maybe: an opening book from deep searches of the positions the first few moves reach, rebuilt for each new network. It would only help the first ten or so moves.
+- Maybe: endgame tablebases (Syzygy) at play time, for positions of five or six pieces.
 - [x] UCI interface (`cinder uci`, and `scripts/cinder-uci.bat` for GUIs on Windows), with promotions printed as `a7a8q` and the positions it's given validated.
 - [ ] Measure strength against engines of known strength, such as Stockfish at fixed levels, over UCI.
 - [x] Cleanups: one helper each for promotions, castling, piece moves and sliding attacks, with perft 5 as fast as before; 24-byte search tree nodes; and en passant squares only where a pawn can capture.
