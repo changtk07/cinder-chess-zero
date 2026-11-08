@@ -215,3 +215,30 @@ The two generation 90 networks against each other, 512 games at 50 simulations p
 
 - **The lower learning rate made no clear difference in ten generations.** Its policy loss fell about 0.04 further and its games drew a little less, but its value loss rose, and head to head it was within chance of the 3e-4 network.
 - So the run continues at 3e-4 from `runs/long`'s checkpoint 90. A decay is worth trying again once the ten-generation matches stop showing gains.
+
+### A lower learning rate again, from generation 130
+
+The run moved to the desktop at checkpoint 90, pulled from Google Drive, and has run there at `0619303` since generation 91, taking about 7.5 minutes a generation. At 3e-4 the ten-generation matches kept gaining, but less:
+
+| match | games | wins | draws | losses | score | Elo | decisive games from an even split |
+|---|---|---|---|---|---|---|---|
+| 90 against 80 | 256 | 79 | 114 | 63 | 0.531 | +22 | +1.3 standard deviations |
+| 100 against 90 | 256 | 76 | 139 | 41 | 0.568 | +48 | +3.2 |
+| 110 against 100 | 256 | 72 | 137 | 47 | 0.549 | +34 | +2.3 |
+| 120 against 110 | 256 | 70 | 125 | 61 | 0.518 | +12 | +0.8 |
+
+That's about +29 every ten generations, half the +55–103 from 10 to 80. So on 2026-11-08 the trial from generation 80 was repeated at checkpoint 130: the run was copied to `runs/long-130-lr1e-4`, outside git and not synced, with only the learning rate changed to 1e-4. Both trained 10 generations side by side from the same seed, at about 16,500 simulations per second each.
+
+| generation | 3e-4 draws | 3e-4 policy loss | 3e-4 value loss | 1e-4 draws | 1e-4 policy loss | 1e-4 value loss |
+|---|---|---|---|---|---|---|
+| 131 | 24% | 1.991 | 0.425 | 24% | 1.985 | 0.436 |
+| 133 | 25% | 1.992 | 0.427 | 25% | 1.966 | 0.451 |
+| 135 | 29% | 1.976 | 0.430 | 23% | 1.947 | 0.450 |
+| 137 | 26% | 1.968 | 0.430 | 23% | 1.953 | 0.452 |
+| 139 | 25% | 1.962 | 0.418 | 20% | 1.952 | 0.444 |
+
+The two generation 140 networks against each other, 512 games at 50 simulations per move without root noise: 1e-4 won 174, drew 234 (4 at the ply limit) and lost 104, a score of 0.568 or +48 Elo, 4.2 standard deviations from an even split in decisive games.
+
+- **This time the lower learning rate was clearly better.** As at generation 80, its policy loss fell a little further, its games drew less, and its value loss was higher. Yet head to head it gained as much in ten generations as 90 to 100, the best ten at 3e-4 since generation 80, and four times what 110 to 120 gained.
+- So `runs/long` continues at 1e-4, but from its own checkpoint 140, trained at 3e-4, not the copy's. The script that played the match and restarted the run only changed the learning rate, which threw away the trial's ten generations at 1e-4. Next time the winner's checkpoints should carry on.
+- By generation 177 the policy loss had fallen from 1.95 at generation 140 to 1.84, and its gap to the targets' entropy from 0.48 to 0.41.
