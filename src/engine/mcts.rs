@@ -177,12 +177,75 @@ impl Search {
             "the pending leaf must be applied first"
         );
 
+        match self.simulate(state) {
+            Simulation::Leaf => true,
+            Simulation::Waiting => unreachable!("only gather_leaves leaves positions waiting"),
+            Simulation::Done => false,
+        }
+    }
+
+    /// Runs simulations until `max` of them wait on the network, the root has the search's visits,
+    /// or one reaches a position already waiting, and returns the positions to evaluate in one
+    /// batch, for `apply_leaves`. Until then each waiting simulation counts as a visit lost by
+    /// every side on its way down, a virtual loss, so the ones after it spread to other moves.
+    /// `state` is back at the root.
+    pub(crate) fn gather_leaves(&mut self, state: &mut State, max: usize) -> Vec<Leaf> {
+        let mut leaves = vec![];
+        while leaves.len() < max {
+            if !matches!(self.simulate(state), Simulation::Leaf) {
+                break;
+            }
+            let path = std::mem::take(&mut self.path);
+            for &idx in &path {
+                self.nodes[idx].record_visit(1.0);
+            }
+            leaves.push(Leaf {
+                state: state.clone(),
+                moves: std::mem::take(&mut self.leaf_moves),
+                path,
+            });
+            for _ in 1..leaves.last().unwrap().path.len() {
+                state.unmake_move();
+            }
+        }
+        leaves
+    }
+
+    /// Expands each leaf `gather_leaves` returned with its evaluation, in the same order, and
+    /// backs its value up the tree in place of its virtual loss.
+    pub(crate) fn apply_leaves(&mut self, leaves: Vec<Leaf>, evaluations: Vec<Evaluation>) {
+        debug_assert_eq!(leaves.len(), evaluations.len());
+        for (leaf, evaluation) in leaves.into_iter().zip(evaluations) {
+            for &idx in &leaf.path {
+                self.nodes[idx].n_visits -= 1;
+                self.nodes[idx].value_sum -= 1.0;
+            }
+            self.expand(*leaf.path.last().unwrap(), &leaf.moves, evaluation.priors);
+            self.record(&leaf.path, evaluation.value);
+        }
+    }
+
+    /// Visits the root has, counting those of a reused subtree.
+    pub(crate) fn root_visits(&self) -> usize {
+        self.nodes[0].n_visits as usize
+    }
+
+    // Runs simulations until one reaches a position the network must evaluate, leaving `state`
+    // there, the path to it in `path` and its legal moves in `leaf_moves`, or reaches one already
+    // waiting for the network, or the root has the search's visits. Finished games are scored
+    // without the network.
+    fn simulate(&mut self, state: &mut State) -> Simulation {
         while (self.nodes[0].n_visits as usize) < self.n_sims {
             let leaf = self.select(state);
 
             if let Some(value) = self.nodes[leaf].terminal {
                 self.backup(state, value as f32);
                 continue;
+            }
+            // Visited but not expanded: a virtual loss
+            if self.nodes[leaf].n_visits > 0 {
+                self.unwind(state);
+                return Simulation::Waiting;
             }
 
             let moves = state.generate_moves();
@@ -197,10 +260,10 @@ impl Search {
             }
 
             self.leaf_moves = moves;
-            return true;
+            return Simulation::Leaf;
         }
 
-        false
+        Simulation::Done
     }
 
     pub(crate) fn leaf_moves(&self) -> &[Move] {
@@ -221,18 +284,21 @@ impl Search {
     /// returns `state` to the root.
     pub(crate) fn apply(&mut self, state: &mut State, evaluation: Evaluation) {
         let leaf = *self.path.last().expect("no leaf is pending");
-        debug_assert_eq!(evaluation.priors.len(), self.leaf_moves.len());
+        let moves = std::mem::take(&mut self.leaf_moves);
+        self.expand(leaf, &moves, evaluation.priors);
+        self.backup(state, evaluation.value);
+    }
 
+    fn expand(&mut self, leaf: usize, moves: &[Move], priors: Vec<f32>) {
+        debug_assert_eq!(priors.len(), moves.len());
         self.nodes[leaf].first_child = self.nodes.len() as u32;
-        self.nodes[leaf].n_children = self.leaf_moves.len() as u8;
+        self.nodes[leaf].n_children = moves.len() as u8;
         self.nodes.extend(
-            self.leaf_moves
+            moves
                 .iter()
-                .zip(evaluation.priors)
+                .zip(priors)
                 .map(|(mv, prior)| Node::new(Some(*mv), prior)),
         );
-
-        self.backup(state, evaluation.value);
     }
 
     /// The root's value for its side to move, averaged over the search: -1 a loss, 1 a win.
@@ -267,12 +333,12 @@ impl Search {
     }
 
     // Descends from the root by PUCT score, making each move on `state`, until it reaches a node
-    // that is unvisited or a finished game
+    // without children: unvisited, a finished game, or waiting for the network
     fn select(&mut self, state: &mut State) -> usize {
         let mut idx = 0;
         self.path.push(idx);
 
-        while self.nodes[idx].n_visits > 0 && self.nodes[idx].terminal.is_none() {
+        while self.nodes[idx].n_children > 0 {
             idx = self.best_child(idx);
             state.make_move(self.nodes[idx].mv.unwrap());
             self.path.push(idx);
@@ -297,20 +363,45 @@ impl Search {
             .unwrap()
     }
 
-    // Records `value`, from the leaf's side to move, at each node on the path, flipping its sign
-    // at every level up, and unmakes the path's moves
-    fn backup(&mut self, state: &mut State, mut value: f32) {
-        while let Some(idx) = self.path.pop() {
+    // Records `value` along the path and unmakes the path's moves
+    fn backup(&mut self, state: &mut State, value: f32) {
+        let path = std::mem::take(&mut self.path);
+        self.record(&path, value);
+        self.path = path;
+        self.unwind(state);
+    }
+
+    // Records `value`, from the leaf's side to move, at each node of `path`, flipping its sign at
+    // every level up
+    fn record(&mut self, path: &[usize], mut value: f32) {
+        for &idx in path.iter().rev() {
             self.nodes[idx].record_visit(value);
             value = -value;
-
-            if !self.path.is_empty() {
-                state.unmake_move();
-            }
         }
-
         self.n_sims_done += 1;
     }
+
+    // Unmakes the path's moves, returning `state` to the root
+    fn unwind(&mut self, state: &mut State) {
+        for _ in 1..self.path.len() {
+            state.unmake_move();
+        }
+        self.path.clear();
+    }
+}
+
+enum Simulation {
+    Leaf,
+    Waiting,
+    Done,
+}
+
+/// A position `gather_leaves` left waiting for the network, with its legal moves
+pub(crate) struct Leaf {
+    pub(crate) state: State,
+    pub(crate) moves: ArrayVec<Move, 218>,
+    // Nodes from the root to the leaf
+    path: Vec<usize>,
 }
 
 /// Runs a single search, evaluating one position at a time.
@@ -597,6 +688,97 @@ mod tests {
             .collect();
         let n_new: usize = gained.iter().sum();
         assert!(2 * gained.last().unwrap() > n_new, "{gained:?}");
+    }
+
+    // Runs the search's remaining simulations in batches of up to `max` with the tiny model,
+    // returning how many batches they took
+    fn finish_in_batches(search: &mut Search, state: &mut State, max: usize) -> usize {
+        let model = tiny_model();
+        let mut n_batches = 0;
+        loop {
+            let leaves = search.gather_leaves(state, max);
+            if leaves.is_empty() {
+                return n_batches;
+            }
+            let states: Vec<&State> = leaves.iter().map(|leaf| &leaf.state).collect();
+            let moves: Vec<&[Move]> = leaves.iter().map(|leaf| &leaf.moves[..]).collect();
+            let evaluations = model.evaluate(&states, &moves, &Default::default());
+            search.apply_leaves(leaves, evaluations);
+            n_batches += 1;
+        }
+    }
+
+    #[test]
+    fn batched_searches_account_for_every_simulation() {
+        let n_sims = 300;
+        let mut search = Search::new(MctsConfig::new().with_n_sims(n_sims));
+        let mut state = State::from_fen(START_FEN);
+        let before = state.to_string();
+        let n_batches = finish_in_batches(&mut search, &mut state, 16);
+
+        assert_eq!(state.to_string(), before);
+        assert_eq!(search.root_visits(), n_sims);
+        assert_eq!(search.n_sims_done(), n_sims);
+        assert_eq!(total_visits(&search), n_sims - 1);
+        // The first batch can only be the root, the second only its moves
+        assert!(n_batches < n_sims / 4, "{n_batches} batches");
+        // No virtual loss is left: every visit's value is in [-1, 1], so the root's average is too
+        assert!(search.root_value().abs() <= 1.0);
+    }
+
+    #[test]
+    fn a_batch_spreads_over_different_positions() {
+        let mut search = Search::new(MctsConfig::new().with_n_sims(1_000));
+        let mut state = State::from_fen(START_FEN);
+        search.set_n_sims(200);
+        finish(&mut search, &mut state);
+        search.set_n_sims(1_000);
+
+        // A batch ends early only on reaching a position already waiting, so its positions differ
+        let leaves = search.gather_leaves(&mut state, 32);
+        let n = leaves.len();
+        assert!(n > 16, "{n} leaves");
+        let mut positions: Vec<String> = leaves.iter().map(|leaf| leaf.state.to_fen()).collect();
+        positions.sort();
+        positions.dedup();
+        assert_eq!(positions.len(), n);
+        // The waiting leaves count as visits until they're applied
+        assert_eq!(search.root_visits(), 200 + n);
+        let model = tiny_model();
+        let states: Vec<&State> = leaves.iter().map(|leaf| &leaf.state).collect();
+        let moves: Vec<&[Move]> = leaves.iter().map(|leaf| &leaf.moves[..]).collect();
+        let evaluations = model.evaluate(&states, &moves, &Default::default());
+        search.apply_leaves(leaves, evaluations);
+        assert_eq!(search.root_visits(), 200 + n);
+        assert_eq!(total_visits(&search), 199 + n);
+    }
+
+    #[test]
+    fn a_batched_search_finds_mate_in_one() {
+        let mut search = Search::new(MctsConfig::new().with_n_sims(400));
+        let mut state = State::from_fen("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1");
+        finish_in_batches(&mut search, &mut state, 16);
+        assert_eq!(
+            search.result().best_move().map(|mv| mv.to_string()),
+            Some("a1a8".to_string())
+        );
+    }
+
+    #[test]
+    fn a_batched_search_continues_a_reused_subtree() {
+        let n_sims = 200;
+        let mut search = Search::new(MctsConfig::new().with_n_sims(n_sims));
+        let mut state = State::from_fen(START_FEN);
+        finish_in_batches(&mut search, &mut state, 8);
+        let mv = search.result().best_move().unwrap();
+        state.make_move(mv);
+        search.reuse_subtree(mv);
+        let kept = search.root_visits();
+        assert!(kept > 1);
+
+        finish_in_batches(&mut search, &mut state, 8);
+        assert_eq!(search.root_visits(), n_sims);
+        assert_eq!(search.n_sims_done(), n_sims - kept);
     }
 
     #[test]
