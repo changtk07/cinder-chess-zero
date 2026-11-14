@@ -1,8 +1,13 @@
 //! The UCI protocol, so chess GUIs such as Cute Chess or Arena, and other engines, can play a
 //! run's network.
 //!
-//! Each `go` runs a fresh search from the position, evaluating one position at a time, so the GPU
-//! does far less work per call than in self-play: about 150 simulations a second on the laptop.
+//! Each `go` runs a fresh search from the position. It evaluates positions in batches, as
+//! self-play does across games, but from one tree. A GPU call costs little more for 64 positions
+//! than for one, so batches run many times the simulations a second. Each batch gathers up to an
+//! eighth of the root's visits so far, at most 64, with virtual losses spreading its simulations
+//! over different moves; keeping batches small next to the tree keeps them from wandering into
+//! moves a search one at a time would skip.
+//!
 //! The search stops at the node count or time its `go` asks for, or on `stop`, and plays the most
 //! visited move, without noise or sampling. Without any limit it runs the default simulations
 //! given at startup.
@@ -29,7 +34,11 @@ const DEFAULT_MOVES_TO_GO: u64 = 30;
 // The most simulations a search runs, for `go infinite` among others: about 1 GB of tree
 const MAX_SIMS: usize = 1_000_000;
 const INFO_INTERVAL: Duration = Duration::from_secs(1);
-const WARM_UP_SIMS: usize = 16;
+// Batches gather up to this share of the root's visits so far, and at most MAX_BATCH positions.
+// Each is padded to MAX_BATCH, which costs a GPU call little more than one position does, so
+// kernels are compiled for that one size.
+const BATCH_SHARE: usize = 8;
+const MAX_BATCH: usize = 64;
 
 /// Answers UCI commands from `input` on `output` until `quit` or the end of the input.
 pub(crate) fn run<B: Backend>(
@@ -104,21 +113,20 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
         Ok(true)
     }
 
-    // The first searches on a GPU spend seconds compiling kernels, so one short search runs before
-    // the first `readyok`, which GUIs wait for, or else before the first move
+    // The first call on a GPU for each batch size spends seconds compiling kernels, so a batch of
+    // the size searches use is evaluated before the first `readyok`, which GUIs wait for, or else
+    // before the first move
     fn warm_up(&mut self) {
         if self.warmed_up {
             return;
         }
-        let mut state = State::from_fen(START_FEN);
-        let mut search = Search::new(MctsConfig::new().with_n_sims(WARM_UP_SIMS));
-        while search.next_leaf(&mut state) {
-            let evaluation = self
-                .model
-                .evaluate(&[&state], &[search.leaf_moves()], self.device)
-                .remove(0);
-            search.apply(&mut state, evaluation);
-        }
+        let state = State::from_fen(START_FEN);
+        let moves = state.generate_moves();
+        self.model.evaluate(
+            &vec![&state; MAX_BATCH],
+            &vec![&moves[..]; MAX_BATCH],
+            self.device,
+        );
         self.warmed_up = true;
     }
 
@@ -145,15 +153,8 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
         let mut keep_going = true;
         let mut stop = false;
 
-        while search.next_leaf(&mut state) {
-            let evaluation = self
-                .model
-                .evaluate(&[&state], &[search.leaf_moves()], self.device)
-                .remove(0);
-            search.apply(&mut state, evaluation);
-
-            // Commands that came during the search. It runs at least two simulations, so the
-            // root's moves have visits to choose from, and remembers a stop that came sooner.
+        loop {
+            // Commands that came during the search
             while let Ok(line) = self.input.try_recv() {
                 match line.split_whitespace().next() {
                     Some("stop") => stop = true,
@@ -165,9 +166,24 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
                     _ => {}
                 }
             }
+            // A search stops only once the root's moves have visits to choose from, and remembers
+            // a stop that came sooner
             let out_of_time = limits.time.is_some_and(|time| start.elapsed() >= time);
-            if (stop || out_of_time) && search.n_sims_done() >= 2 {
+            let full = search.root_visits() >= n_sims;
+            let can_stop = search.root_visits() >= 2;
+            if can_stop && (stop || out_of_time) || full {
                 break;
+            }
+
+            let batch = (search.root_visits() / BATCH_SHARE).clamp(1, MAX_BATCH);
+            let leaves = search.gather_leaves(&mut state, batch);
+            if !leaves.is_empty() {
+                let states: Vec<&State> = leaves.iter().map(|leaf| &leaf.state).collect();
+                let leaf_moves: Vec<&[Move]> = leaves.iter().map(|leaf| &leaf.moves[..]).collect();
+                let evaluations =
+                    self.model
+                        .evaluate_padded(&states, &leaf_moves, MAX_BATCH, self.device);
+                search.apply_leaves(leaves, evaluations);
             }
             if last_info.elapsed() >= INFO_INTERVAL {
                 self.send_info(&search, start)?;

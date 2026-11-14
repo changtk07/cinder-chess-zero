@@ -114,6 +114,7 @@ impl MoveGenMasks {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Board {
     pub(crate) pieces: [Bitmask; 12],
     pub(crate) colors: [Bitmask; 2],

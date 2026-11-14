@@ -512,7 +512,8 @@ pub(crate) fn play_match<B: Backend>(
                 .iter()
                 .map(|&i| games[i].0.search.leaf_moves())
                 .collect();
-            let evaluations = model.evaluate_padded(&states, &moves, device);
+            let size = states.len().next_power_of_two();
+            let evaluations = model.evaluate_padded(&states, &moves, size, device);
             for (&i, evaluation) in searching.iter().zip(evaluations) {
                 games[i].0.apply(evaluation, config);
             }

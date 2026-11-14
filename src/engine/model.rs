@@ -287,17 +287,18 @@ impl<B: Backend> TransformerModel<B> {
             .collect()
     }
 
-    /// Like `evaluate`, but pads the batch to a power of two by repeating its last position. burn
+    /// Like `evaluate`, but pads the batch to `size` positions by repeating its last position. burn
     /// compiles kernels for every new batch size, which takes far longer than evaluating, so a
     /// batch whose size keeps changing is better off reusing a few sizes.
     pub(crate) fn evaluate_padded(
         &self,
         states: &[&State],
         moves: &[&[Move]],
+        size: usize,
         device: &B::Device,
     ) -> Vec<Evaluation> {
         let n = states.len();
-        let size = n.next_power_of_two();
+        debug_assert!(n <= size);
         let mut states = states.to_vec();
         let mut moves = moves.to_vec();
         states.resize(size, states[n - 1]);
@@ -450,7 +451,7 @@ mod tests {
         let moves: Vec<&[Move]> = moves.iter().map(|moves| &moves[..]).collect();
 
         // Three positions are padded to four
-        let padded = model.evaluate_padded(&states, &moves, &device);
+        let padded = model.evaluate_padded(&states, &moves, 4, &device);
         let plain = model.evaluate(&states, &moves, &device);
         assert_eq!(padded.len(), 3);
         for (padded, plain) in padded.iter().zip(&plain) {

@@ -26,6 +26,7 @@ struct UndoRecord {
     hash: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct State {
     pub(crate) board: Board,
     pub(crate) turn: Color,

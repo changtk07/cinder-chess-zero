@@ -160,6 +160,22 @@ How often self-play asks the network about a position it has already evaluated, 
 
 Repeats grow as games go on, from transpositions in long endgames, and openings repeat across games. A cache would save about 11–16% of evaluations kept per game, or 15–22% shared between games, so self-play would run about 1.1–1.25× as fast. Each entry holds a prior for every legal move as well as the value, about 150 bytes, so a cache per game for 512 games would grow to about 2 GB late in the games, and a shared one larger still; a size limit would lower these rates.
 
+### UCI search
+
+Measured on 2026-11-15 on the 4090 with nothing else on the GPU, with generation 230 of `runs/long`. A script drove `cinder uci runs/long 230 --backend cuda-bf16` through searches of 800 nodes. The search used to evaluate one position per call. It now gathers batches with virtual losses (`Search::gather_leaves`), up to an eighth of the root's visits and at most 64, and pads each to 64:
+
+| | one position per call | batches |
+|---|---|---|
+| warm-up, to the first `readyok` | 5.3 s | 6.9 s |
+| first 800-node search from the start position | 5.6 s | 1.0 s |
+| the same search again | 5.4 s, 148 simulations/s | 0.31 s, 2,600 simulations/s |
+
+Both play d2d4, scored +11 cp. An 800-node search makes 52 network calls. The first search after startup still compiles some kernels, for about 0.7 s.
+
+The network's cost per call barely depends on the batch. From `cinder bench 64`, with the same 8 × 256 network, it's 6.4 ms at 1 position, 6.9 at 4, 6.8 at 16 and 7.6 at 64. Compiling kernels for each new batch size takes far longer, about 5.5 s. Padding each batch to the next power of two, seven sizes, made the warm-up 40 s, and padding to powers of four, 26.6 s. Padding every batch to 64 took 7.6 s, and searches were as fast with every padding, so every batch is padded to 64.
+
+Several engines can share the GPU. With 4 copies of the old engine searching at once, each ran 98 simulations a second, 2.6 times the total of one alone, and 8 at once ran no faster in total. So matches at fixed nodes can play a few games at once, while matches on the clock need the GPU to themselves.
+
 ## CPU parallelism
 
 Tree work on one thread takes about 0.36 ms per 256-game step, against about 17 ms for the network. With rayon over 24 threads it took about 3.6 ms, and the network call itself rose from about 17.4 to 18.9 ms. Dispatching thousands of microsecond tasks costs more than it saves, and idle workers likely compete with the thread driving the GPU. Rayon was slower at every size tried, so the tree work is sequential.
