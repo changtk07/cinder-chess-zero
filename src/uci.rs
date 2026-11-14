@@ -1,12 +1,15 @@
 //! The UCI protocol, so chess GUIs such as Cute Chess or Arena, and other engines, can play a
 //! run's network.
 //!
-//! Each `go` runs a fresh search from the position. It evaluates positions in batches, as
-//! self-play does across games, but from one tree. A GPU call costs little more for 64 positions
-//! than for one, so batches run many times the simulations a second. Each batch gathers up to an
-//! eighth of the root's visits so far, at most 64, with virtual losses spreading its simulations
-//! over different moves; keeping batches small next to the tree keeps them from wandering into
-//! moves a search one at a time would skip.
+//! A search evaluates positions in batches, as self-play does across games, but from one tree. A
+//! GPU call costs little more for 64 positions than for one, so batches run many times the
+//! simulations a second. Each batch gathers up to an eighth of the root's visits so far, at most
+//! 64, with virtual losses spreading its simulations over different moves; keeping batches small
+//! next to the tree keeps them from wandering into moves a search one at a time would skip.
+//!
+//! The tree carries over between moves: when the position to search is the last search's, or one
+//! or two moves on, as after its move and the reply, the search starts from that subtree. Node
+//! limits count the root's visits, reused ones included, as self-play's do.
 //!
 //! The search stops at the node count or time its `go` asks for, or on `stop`, and plays the most
 //! visited move, without noise or sampling. Without any limit it runs the default simulations
@@ -48,15 +51,7 @@ pub(crate) fn run<B: Backend>(
     input: Receiver<String>,
     output: impl Write,
 ) -> io::Result<()> {
-    let mut engine = Engine {
-        model,
-        device,
-        default_sims,
-        state: State::from_fen(START_FEN),
-        input,
-        output,
-        warmed_up: false,
-    };
+    let mut engine = Engine::new(model, default_sims, device, input, output);
     while let Ok(line) = engine.input.recv() {
         if !engine.handle(&line)? {
             break;
@@ -70,6 +65,9 @@ struct Engine<'a, B: Backend, W: Write> {
     device: &'a B::Device,
     default_sims: usize,
     state: State,
+    search: Search,
+    // The position the search's tree is of, if it has one
+    tree_root: Option<State>,
     input: Receiver<String>,
     output: W,
     warmed_up: bool,
@@ -83,7 +81,27 @@ struct Limits {
     infinite: bool,
 }
 
-impl<B: Backend, W: Write> Engine<'_, B, W> {
+impl<'a, B: Backend, W: Write> Engine<'a, B, W> {
+    fn new(
+        model: &'a TransformerModel<B>,
+        default_sims: usize,
+        device: &'a B::Device,
+        input: Receiver<String>,
+        output: W,
+    ) -> Self {
+        Self {
+            model,
+            device,
+            default_sims,
+            state: State::from_fen(START_FEN),
+            search: Search::new(MctsConfig::new().with_n_sims(default_sims)),
+            tree_root: None,
+            input,
+            output,
+            warmed_up: false,
+        }
+    }
+
     // Returns false on `quit`
     fn handle(&mut self, line: &str) -> io::Result<bool> {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -97,7 +115,10 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
                 self.warm_up();
                 self.send("readyok")?
             }
-            Some("ucinewgame") => self.state = State::from_fen(START_FEN),
+            Some("ucinewgame") => {
+                self.state = State::from_fen(START_FEN);
+                self.tree_root = None;
+            }
             Some("position") => match parse_position(&words[1..]) {
                 Ok(state) => self.state = state,
                 Err(error) => self.send(&format!("info string {error}"))?,
@@ -145,7 +166,9 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
         } else {
             limits.nodes.unwrap_or(self.default_sims).clamp(2, MAX_SIMS)
         };
-        let mut search = Search::new(MctsConfig::new().with_n_sims(n_sims));
+        self.keep_tree();
+        self.search.set_n_sims(n_sims);
+        let reused_visits = self.search.root_visits();
         // Searches return the position to where they started. It's taken out for the search, with
         // its history, which repetitions are found in, and put back after.
         let mut state = std::mem::replace(&mut self.state, State::from_fen(START_FEN));
@@ -169,46 +192,65 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
             // A search stops only once the root's moves have visits to choose from, and remembers
             // a stop that came sooner
             let out_of_time = limits.time.is_some_and(|time| start.elapsed() >= time);
-            let full = search.root_visits() >= n_sims;
-            let can_stop = search.root_visits() >= 2;
+            let full = self.search.root_visits() >= n_sims;
+            let can_stop = self.search.root_visits() >= 2;
             if can_stop && (stop || out_of_time) || full {
                 break;
             }
 
-            let batch = (search.root_visits() / BATCH_SHARE).clamp(1, MAX_BATCH);
-            let leaves = search.gather_leaves(&mut state, batch);
+            let batch = (self.search.root_visits() / BATCH_SHARE).clamp(1, MAX_BATCH);
+            let leaves = self.search.gather_leaves(&mut state, batch);
             if !leaves.is_empty() {
                 let states: Vec<&State> = leaves.iter().map(|leaf| &leaf.state).collect();
                 let leaf_moves: Vec<&[Move]> = leaves.iter().map(|leaf| &leaf.moves[..]).collect();
                 let evaluations =
                     self.model
                         .evaluate_padded(&states, &leaf_moves, MAX_BATCH, self.device);
-                search.apply_leaves(leaves, evaluations);
+                self.search.apply_leaves(leaves, evaluations);
             }
             if last_info.elapsed() >= INFO_INTERVAL {
-                self.send_info(&search, start)?;
+                self.send_info(start, reused_visits)?;
                 last_info = Instant::now();
             }
         }
 
         self.state = state;
-        self.send_info(&search, start)?;
-        let best = search.result().best_move().unwrap_or(moves[0]);
+        self.tree_root = Some(self.state.clone());
+        self.send_info(start, reused_visits)?;
+        let best = self.search.result().best_move().unwrap_or(moves[0]);
         self.send(&format!("bestmove {best}"))?;
         Ok(keep_going)
     }
 
-    fn send_info(&mut self, search: &Search, start: Instant) -> io::Result<()> {
-        let line = search.principal_variation();
+    // Keeps the subtree the last search's tree has of the position to search, if it's that
+    // search's position or one or two moves on, or else starts afresh
+    fn keep_tree(&mut self) {
+        let line = self
+            .tree_root
+            .take()
+            .and_then(|root| line_between(root, &self.state));
+        match line {
+            Some(line) => {
+                for mv in line {
+                    self.search.reuse_subtree(mv);
+                }
+            }
+            None => self.search.reset(),
+        }
+    }
+
+    // `nodes` counts the root's visits, reused ones included, and `nps` only this search's
+    fn send_info(&mut self, start: Instant, reused_visits: usize) -> io::Result<()> {
+        let line = self.search.principal_variation();
         let elapsed = start.elapsed();
-        let n_sims = search.n_sims_done();
+        let visits = self.search.root_visits();
         let pv: Vec<String> = line.iter().map(Move::to_string).collect();
         self.send(&format!(
-            "info depth {} nodes {n_sims} nps {:.0} time {} score cp {} pv {}",
+            "info depth {} nodes {visits} nps {:.0} time {} score cp {} pv {}",
             line.len().max(1),
-            n_sims as f64 / elapsed.as_secs_f64().max(1e-3),
+            (visits - reused_visits) as f64 / elapsed.as_secs_f64().max(1e-3),
             elapsed.as_millis(),
-            centipawns(search.root_value()),
+            centipawns(self.search.root_value()),
             pv.join(" ")
         ))
     }
@@ -223,6 +265,30 @@ impl<B: Backend, W: Write> Engine<'_, B, W> {
 fn centipawns(value: f32) -> i32 {
     let value = value.clamp(-0.999, 0.999) as f64;
     (90.0 * (1.5637541897 * value).tan()).round() as i32
+}
+
+// The moves, none to two, that lead from `root` to `target`'s position, if any do
+fn line_between(mut root: State, target: &State) -> Option<Vec<Move>> {
+    let goal = target.to_fen();
+    if root.to_fen() == goal {
+        return Some(vec![]);
+    }
+    for first in root.generate_moves() {
+        root.make_move(first);
+        if root.to_fen() == goal {
+            return Some(vec![first]);
+        }
+        for reply in root.generate_moves() {
+            root.make_move(reply);
+            let found = root.to_fen() == goal;
+            root.unmake_move();
+            if found {
+                return Some(vec![first, reply]);
+            }
+        }
+        root.unmake_move();
+    }
+    None
 }
 
 // `startpos` or `fen <fields>`, then optionally `moves` and moves in UCI notation
@@ -318,6 +384,61 @@ mod tests {
         assert!(lines[0].starts_with("id name Cinder"));
         assert_eq!(lines.last().unwrap(), "readyok");
         assert!(lines.contains(&"uciok".to_string()));
+    }
+
+    #[test]
+    fn the_tree_carries_over_to_the_position_after_the_reply() {
+        let model = tiny_model();
+        let device = Default::default();
+        let (_sender, receiver) = mpsc::channel();
+        let mut engine = Engine::new(&model, 8, &device, receiver, vec![]);
+        engine.handle("position startpos").unwrap();
+        engine.handle("go nodes 200").unwrap();
+        let line = engine.search.principal_variation();
+        assert!(line.len() >= 2, "{line:?}");
+
+        engine
+            .handle(&format!("position startpos moves {} {}", line[0], line[1]))
+            .unwrap();
+        engine.handle("go nodes 200").unwrap();
+        assert_eq!(engine.search.root_visits(), 200);
+        assert!(engine.search.n_sims_done() < 200);
+
+        // A position the tree doesn't reach starts afresh
+        engine
+            .handle("position fen 6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1")
+            .unwrap();
+        engine.handle("go nodes 200").unwrap();
+        assert_eq!(engine.search.n_sims_done(), 200);
+    }
+
+    #[test]
+    fn lines_of_up_to_two_moves_are_found() {
+        let start = || State::from_fen(START_FEN);
+        let after = |moves: &[&str]| {
+            let words: Vec<&str> = ["startpos", "moves"].iter().chain(moves).copied().collect();
+            parse_position(&words).unwrap()
+        };
+        let names = |line: Option<Vec<Move>>| {
+            line.map(|line| line.iter().map(Move::to_string).collect::<Vec<_>>())
+        };
+        assert_eq!(names(line_between(start(), &start())), Some(vec![]));
+        assert_eq!(
+            names(line_between(start(), &after(&["g1f3"]))),
+            Some(vec!["g1f3".into()])
+        );
+        assert_eq!(
+            names(line_between(start(), &after(&["e2e4", "c7c5"]))),
+            Some(vec!["e2e4".into(), "c7c5".into()])
+        );
+        assert_eq!(
+            line_between(start(), &after(&["e2e4", "c7c5", "g1f3"])),
+            None
+        );
+        assert_eq!(
+            line_between(after(&["d2d4"]), &after(&["e2e4", "c7c5"])),
+            None
+        );
     }
 
     #[test]

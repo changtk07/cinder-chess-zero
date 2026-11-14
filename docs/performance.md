@@ -174,6 +174,8 @@ Both play d2d4, scored +11 cp. An 800-node search makes 52 network calls. The fi
 
 The network's cost per call barely depends on the batch. From `cinder bench 64`, with the same 8 × 256 network, it's 6.4 ms at 1 position, 6.9 at 4, 6.8 at 16 and 7.6 at 64. Compiling kernels for each new batch size takes far longer, about 5.5 s. Padding each batch to the next power of two, seven sizes, made the warm-up 40 s, and padding to powers of four, 26.6 s. Padding every batch to 64 took 7.6 s, and searches were as fast with every padding, so every batch is padded to 64.
 
+The tree carries over between moves. In the same test, the four 800-node searches after the replies the engine expected kept 98–465 of their visits, 38% on average, and took 0.04–0.12 s.
+
 Several engines can share the GPU. With 4 copies of the old engine searching at once, each ran 98 simulations a second, 2.6 times the total of one alone, and 8 at once ran no faster in total. So matches at fixed nodes can play a few games at once, while matches on the clock need the GPU to themselves.
 
 ## CPU parallelism

@@ -765,6 +765,23 @@ mod tests {
     }
 
     #[test]
+    fn a_batched_search_continues_a_reused_subtree() {
+        let n_sims = 200;
+        let mut search = Search::new(MctsConfig::new().with_n_sims(n_sims));
+        let mut state = State::from_fen(START_FEN);
+        finish_in_batches(&mut search, &mut state, 8);
+        let mv = search.result().best_move().unwrap();
+        state.make_move(mv);
+        search.reuse_subtree(mv);
+        let kept = search.root_visits();
+        assert!(kept > 1);
+
+        finish_in_batches(&mut search, &mut state, 8);
+        assert_eq!(search.root_visits(), n_sims);
+        assert_eq!(search.n_sims_done(), n_sims - kept);
+    }
+
+    #[test]
     fn nodes_stay_small() {
         // Self-play keeps a tree for every game at once
         assert_eq!(std::mem::size_of::<Node>(), 24);
