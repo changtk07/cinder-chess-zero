@@ -174,9 +174,16 @@ Both play d2d4, scored +11 cp. An 800-node search makes 52 network calls. The fi
 
 The network's cost per call barely depends on the batch. From `cinder bench 64`, with the same 8 × 256 network, it's 6.4 ms at 1 position, 6.9 at 4, 6.8 at 16 and 7.6 at 64. Compiling kernels for each new batch size takes far longer, about 5.5 s. Padding each batch to the next power of two, seven sizes, made the warm-up 40 s, and padding to powers of four, 26.6 s. Padding every batch to 64 took 7.6 s, and searches were as fast with every padding, so every batch is padded to 64.
 
-The tree carries over between moves. In the same test, the four 800-node searches after the replies the engine expected kept 98–465 of their visits, 38% on average, and took 0.04–0.12 s.
+The tree carries over between moves. In the same test, the four 800-node searches after the replies the engine expected kept 98–465 of their visits, 38% on average, and took 0.04–0.12 s. Pondering on the expected reply for 3 s, a search reached its 800 nodes and answered at once on `ponderhit`.
 
 Several engines can share the GPU. With 4 copies of the old engine searching at once, each ran 98 simulations a second, 2.6 times the total of one alone, and 8 at once ran no faster in total. So matches at fixed nodes can play a few games at once, while matches on the clock need the GPU to themselves.
+
+**Strength.** Matches of the new search, with batching and tree reuse, against the old one, with the same network, from balanced 8-ply openings picked with Stockfish, each played with both colours, using fastchess, which adjudicated games once both engines' scores agreed for a few moves:
+
+- At 10+0.1 on the clock, about a third of a second a move, one game at a time: 28 wins, 1 draw and 1 loss for the new search.
+- At 400 nodes a move, the new search counting the visits it carried over, four games at a time: 7 wins, 22 draws and 33 losses for the new search, 29%, about −155 ± 67 Elo. The match was stopped after 62 of its 120 games to give the GPU back to training.
+
+So a batched simulation is worth less than one made a position at a time, since each batch picks its leaves without the values of the others, but at equal time the new search makes far more of them. The match at equal nodes doesn't separate the cost of batching from that of counting carried-over visits.
 
 ## CPU parallelism
 

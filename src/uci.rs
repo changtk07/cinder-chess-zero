@@ -11,9 +11,13 @@
 //! or two moves on, as after its move and the reply, the search starts from that subtree. Node
 //! limits count the root's visits, reused ones included, as self-play's do.
 //!
+//! `go ponder` searches the position after the reply the last `bestmove` expected while the
+//! opponent thinks, and doesn't answer until `ponderhit`, which says the reply came and starts its
+//! clock, or `stop`. A ponder search that reaches its node limit waits for either.
+//!
 //! The search stops at the node count or time its `go` asks for, or on `stop`, and plays the most
-//! visited move, without noise or sampling. Without any limit it runs the default simulations
-//! given at startup.
+//! visited move, without noise or sampling, naming the reply it expects for GUIs that ponder.
+//! Without any limit it runs the default simulations given at startup.
 
 use crate::{
     chess::{moves::Move, state::START_FEN, State},
@@ -79,6 +83,17 @@ struct Limits {
     nodes: Option<usize>,
     time: Option<Duration>,
     infinite: bool,
+    // Searching on the opponent's time, until `ponderhit` or `stop`
+    ponder: bool,
+}
+
+// What commands that come during a search have asked for
+struct Control {
+    stop: bool,
+    quit: bool,
+    pondering: bool,
+    // When the time limit started: at the `go`, or at `ponderhit`
+    clock_start: Instant,
 }
 
 impl<'a, B: Backend, W: Write> Engine<'a, B, W> {
@@ -109,6 +124,8 @@ impl<'a, B: Backend, W: Write> Engine<'a, B, W> {
             Some("uci") => {
                 self.send(&format!("id name {NAME}"))?;
                 self.send("id author Kevin Chang")?;
+                // GUIs only ponder with engines that list this; the engine needn't know the value
+                self.send("option name Ponder type check default false")?;
                 self.send("uciok")?;
             }
             Some("isready") => {
@@ -128,7 +145,7 @@ impl<'a, B: Backend, W: Write> Engine<'a, B, W> {
                 return self.go(&limits);
             }
             Some("quit") => return Ok(false),
-            // `stop` outside a search, and anything unknown, which UCI says to ignore
+            // `stop` or `ponderhit` outside a search, and anything unknown, which UCI says to ignore
             _ => {}
         }
         Ok(true)
@@ -172,30 +189,37 @@ impl<'a, B: Backend, W: Write> Engine<'a, B, W> {
         // Searches return the position to where they started. It's taken out for the search, with
         // its history, which repetitions are found in, and put back after.
         let mut state = std::mem::replace(&mut self.state, State::from_fen(START_FEN));
+        let mut control = Control {
+            stop: false,
+            quit: false,
+            pondering: limits.ponder,
+            clock_start: start,
+        };
         let mut last_info = start;
-        let mut keep_going = true;
-        let mut stop = false;
 
         loop {
-            // Commands that came during the search
             while let Ok(line) = self.input.try_recv() {
-                match line.split_whitespace().next() {
-                    Some("stop") => stop = true,
-                    Some("quit") => {
-                        stop = true;
-                        keep_going = false;
-                    }
-                    Some("isready") => self.send("readyok")?,
-                    _ => {}
-                }
+                self.during_search(&line, &mut control)?;
             }
             // A search stops only once the root's moves have visits to choose from, and remembers
             // a stop that came sooner
-            let out_of_time = limits.time.is_some_and(|time| start.elapsed() >= time);
+            let out_of_time = !control.pondering
+                && limits
+                    .time
+                    .is_some_and(|time| control.clock_start.elapsed() >= time);
             let full = self.search.root_visits() >= n_sims;
             let can_stop = self.search.root_visits() >= 2;
-            if can_stop && (stop || out_of_time) || full {
+            if can_stop && (control.stop || out_of_time) || full && !control.pondering {
                 break;
+            }
+            if full {
+                // A ponder search that has all its visits waits for the GUI to say how it ends
+                match self.input.recv() {
+                    Ok(line) => self.during_search(&line, &mut control)?,
+                    Err(_) => control.quit = true,
+                }
+                control.stop |= control.quit;
+                continue;
             }
 
             let batch = (self.search.root_visits() / BATCH_SHARE).clamp(1, MAX_BATCH);
@@ -218,8 +242,30 @@ impl<'a, B: Backend, W: Write> Engine<'a, B, W> {
         self.tree_root = Some(self.state.clone());
         self.send_info(start, reused_visits)?;
         let best = self.search.result().best_move().unwrap_or(moves[0]);
-        self.send(&format!("bestmove {best}"))?;
-        Ok(keep_going)
+        let ponder = match self.search.principal_variation()[..] {
+            [first, reply, ..] if first == best => format!(" ponder {reply}"),
+            _ => String::new(),
+        };
+        self.send(&format!("bestmove {best}{ponder}"))?;
+        Ok(!control.quit)
+    }
+
+    // Acts on a command that came during a search
+    fn during_search(&mut self, line: &str, control: &mut Control) -> io::Result<()> {
+        match line.split_whitespace().next() {
+            Some("stop") => control.stop = true,
+            Some("quit") => {
+                control.stop = true;
+                control.quit = true;
+            }
+            Some("ponderhit") if control.pondering => {
+                control.pondering = false;
+                control.clock_start = Instant::now();
+            }
+            Some("isready") => self.send("readyok")?,
+            _ => {}
+        }
+        Ok(())
     }
 
     // Keeps the subtree the last search's tree has of the position to search, if it's that
@@ -344,6 +390,7 @@ fn parse_go(words: &[&str], state: &State) -> Limits {
         nodes: value("nodes").map(|nodes| nodes as usize),
         time,
         infinite: words.contains(&"infinite"),
+        ponder: words.contains(&"ponder"),
     }
 }
 
@@ -351,7 +398,10 @@ fn parse_go(words: &[&str], state: &State) -> Limits {
 mod tests {
     use super::*;
     use crate::engine::model::tiny_model;
-    use std::sync::mpsc;
+    use std::{
+        sync::{mpsc, Arc, Mutex},
+        thread,
+    };
 
     // Runs the engine on `commands` and returns what it sent
     fn session(commands: &[&str]) -> Vec<String> {
@@ -369,13 +419,78 @@ mod tests {
             .collect()
     }
 
-    fn best_move(lines: &[String]) -> &str {
+    // The last `bestmove` line's words after `bestmove`
+    fn best_move_words(lines: &[String]) -> Vec<&str> {
         let line = lines
             .iter()
             .rev()
             .find(|line| line.starts_with("bestmove "))
             .expect("a bestmove");
-        line.strip_prefix("bestmove ").unwrap()
+        line.split_whitespace().skip(1).collect()
+    }
+
+    fn best_move(lines: &[String]) -> &str {
+        best_move_words(lines)[0]
+    }
+
+    // Output tests can read while the engine still runs on another thread
+    #[derive(Clone, Default)]
+    struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedOutput {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SharedOutput {
+        fn has_bestmove(&self) -> bool {
+            String::from_utf8(self.0.lock().unwrap().clone())
+                .unwrap()
+                .lines()
+                .any(|line| line.starts_with("bestmove "))
+        }
+
+        fn wait_for_bestmove(&self) -> bool {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(30) {
+                if self.has_bestmove() {
+                    return true;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            false
+        }
+    }
+
+    // Starts a ponder search with `go`, gives it `wait` to finish if it would answer by itself,
+    // then sends `end`, checking it answers only after `end`
+    fn ponder(go: &str, wait: Duration, end: &str) {
+        let (sender, receiver) = mpsc::channel();
+        let output = SharedOutput::default();
+        let engine_output = output.clone();
+        let engine = thread::spawn(move || {
+            run(
+                &tiny_model(),
+                8,
+                &Default::default(),
+                receiver,
+                engine_output,
+            )
+            .unwrap()
+        });
+        sender.send(go.to_string()).unwrap();
+        thread::sleep(wait);
+        assert!(!output.has_bestmove(), "answered before {end}");
+        sender.send(end.to_string()).unwrap();
+        assert!(output.wait_for_bestmove(), "no answer after {end}");
+        sender.send("quit".to_string()).unwrap();
+        engine.join().unwrap();
     }
 
     #[test]
@@ -384,6 +499,20 @@ mod tests {
         assert!(lines[0].starts_with("id name Cinder"));
         assert_eq!(lines.last().unwrap(), "readyok");
         assert!(lines.contains(&"uciok".to_string()));
+        assert!(lines.contains(&"option name Ponder type check default false".to_string()));
+    }
+
+    #[test]
+    fn it_names_the_reply_it_expects() {
+        let lines = session(&["position startpos", "go nodes 100"]);
+        let [best, "ponder", reply] = best_move_words(&lines)[..] else {
+            panic!("{lines:?}");
+        };
+        let after = parse_position(&["startpos", "moves", best]).unwrap();
+        assert!(after
+            .generate_moves()
+            .iter()
+            .any(|mv| mv.to_string() == reply));
     }
 
     #[test]
@@ -438,6 +567,19 @@ mod tests {
         assert_eq!(
             line_between(after(&["d2d4"]), &after(&["e2e4", "c7c5"])),
             None
+        );
+    }
+
+    #[test]
+    fn a_ponder_search_answers_only_after_ponderhit_or_stop() {
+        // At its node limit it waits
+        ponder("go ponder nodes 20", Duration::from_secs(2), "ponderhit");
+        ponder("go ponder nodes 20", Duration::from_secs(2), "stop");
+        // and its time limit starts at ponderhit
+        ponder(
+            "go ponder movetime 300",
+            Duration::from_secs(1),
+            "ponderhit",
         );
     }
 
@@ -519,6 +661,7 @@ mod tests {
             Some(Duration::from_millis(450))
         );
         assert_eq!(parse_go(&["nodes", "77"], &white).nodes, Some(77));
+        assert!(parse_go(&["ponder", "wtime", "60000", "btime", "1000"], &white).ponder);
         assert_eq!(parse_go(&[], &white), Limits::default());
     }
 
