@@ -45,7 +45,9 @@ impl Node {
     }
 
     fn q_val(&self) -> f32 {
-        if self.n_visits == 0 {
+        if let Some(value) = self.terminal {
+            value as f32
+        } else if self.n_visits == 0 {
             0.0
         } else {
             self.value_sum / self.n_visits as f32
@@ -78,6 +80,14 @@ pub(crate) struct MctsConfig {
     /// with its visits and only runs the simulations still missing.
     #[config(default = 200)]
     n_sims: usize,
+    /// Untried moves score as the parent's value less this times the square root of the priors
+    /// already tried, as in Leela, instead of as draws
+    #[config(default = "None")]
+    fpu_reduction: Option<f32>,
+    /// Marks positions as won or lost once the search proves it: won if a move leads to a proven
+    /// loss, lost if every move leads to a proven win, and plays a proven win
+    #[config(default = false)]
+    solve_mates: bool,
 }
 
 /// A search tree that pauses whenever a simulation reaches a position the network must evaluate,
@@ -94,7 +104,16 @@ pub(crate) struct Search {
 }
 
 impl Search {
-    pub(crate) fn new(config: MctsConfig) -> Self {
+    pub(crate) fn new(mut config: MctsConfig) -> Self {
+        if let Some(reduction) = std::env::var("CINDER_FPU")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            config.fpu_reduction = Some(reduction);
+        }
+        if std::env::var("CINDER_SOLVE").is_ok() {
+            config.solve_mates = true;
+        }
         let mut search = Self {
             nodes: vec![],
             n_sims: config.n_sims,
@@ -239,6 +258,7 @@ impl Search {
             let leaf = self.select(state);
 
             if let Some(value) = self.nodes[leaf].terminal {
+                self.prove();
                 self.backup(state, value as f32);
                 continue;
             }
@@ -255,6 +275,7 @@ impl Search {
                     Outcome::Draw => 0,
                 };
                 self.nodes[leaf].terminal = Some(value);
+                self.prove();
                 self.backup(state, value as f32);
                 continue;
             }
@@ -329,6 +350,10 @@ impl Search {
                 .children()
                 .map(|i| (self.nodes[i].mv.unwrap(), self.nodes[i].n_visits as usize))
                 .collect(),
+            proven_win: root
+                .children()
+                .find(|&i| self.nodes[i].terminal == Some(-1))
+                .map(|i| self.nodes[i].mv.unwrap()),
         }
     }
 
@@ -338,7 +363,7 @@ impl Search {
         let mut idx = 0;
         self.path.push(idx);
 
-        while self.nodes[idx].n_children > 0 {
+        while self.nodes[idx].n_children > 0 && (idx == 0 || self.nodes[idx].terminal.is_none()) {
             idx = self.best_child(idx);
             state.make_move(self.nodes[idx].mv.unwrap());
             self.path.push(idx);
@@ -348,19 +373,58 @@ impl Search {
     }
 
     fn best_child(&self, idx: usize) -> usize {
-        let sqrt_parent_visits = (self.nodes[idx].n_visits as f32).sqrt();
+        let parent = &self.nodes[idx];
+        let sqrt_parent_visits = (parent.n_visits as f32).sqrt();
+        let first_play = self.config.fpu_reduction.map(|reduction| {
+            let tried: f32 = parent
+                .children()
+                .filter(|&i| self.nodes[i].n_visits > 0)
+                .map(|i| self.nodes[i].prior)
+                .sum();
+            parent.q_val() - reduction * tried.sqrt()
+        });
 
-        self.nodes[idx]
+        parent
             .children()
             .map(|i| {
-                (
-                    i,
-                    self.nodes[i].score(self.config.c_puct, sqrt_parent_visits),
-                )
+                let node = &self.nodes[i];
+                let score = match first_play {
+                    Some(first_play) if node.n_visits == 0 => {
+                        first_play + node.u_val(self.config.c_puct, sqrt_parent_visits)
+                    }
+                    _ => node.score(self.config.c_puct, sqrt_parent_visits),
+                };
+                (i, score)
             })
             .max_by(|(_, sa), (_, sb)| sa.partial_cmp(sb).unwrap_or(Ordering::Equal))
             .map(|(i, _)| i)
             .unwrap()
+    }
+
+    // Walks up the path from its last node, finished or proven, marking each parent proven while
+    // it can be: won if the child is lost for its side to move, lost if every child is won
+    fn prove(&mut self) {
+        if !self.config.solve_mates {
+            return;
+        }
+        for k in (1..self.path.len()).rev() {
+            let (child, parent) = (self.path[k], self.path[k - 1]);
+            if self.nodes[parent].terminal.is_some() {
+                break;
+            }
+            let proven = match self.nodes[child].terminal {
+                Some(-1) => 1,
+                Some(1)
+                    if self.nodes[parent]
+                        .children()
+                        .all(|i| self.nodes[i].terminal == Some(1)) =>
+                {
+                    -1
+                }
+                _ => break,
+            };
+            self.nodes[parent].terminal = Some(proven);
+        }
     }
 
     // Records `value` along the path and unmakes the path's moves
@@ -443,10 +507,15 @@ impl<'a, B: Backend> Mcts<'a, B> {
 pub(crate) struct SearchResult {
     /// Root moves with their visit counts; empty if the root is a finished game
     pub(crate) visits: Vec<(Move, usize)>,
+    /// A root move the search proved wins, if it found one
+    pub(crate) proven_win: Option<Move>,
 }
 
 impl SearchResult {
     pub(crate) fn best_move(&self) -> Option<Move> {
+        if self.proven_win.is_some() {
+            return self.proven_win;
+        }
         self.visits
             .iter()
             .max_by_key(|(_, n_visits)| *n_visits)
@@ -504,6 +573,32 @@ mod tests {
         assert_eq!(
             best_move("r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1", 400),
             Some("a8a1".into())
+        );
+    }
+
+    #[test]
+    fn a_solving_search_proves_and_plays_mate_in_two() {
+        // Kf7 is the only mate in two: Kh7 is forced, then Rh1 mates
+        let model = tiny_model();
+        let config = MctsConfig::new().with_n_sims(2000).with_solve_mates(true);
+        let mut state = State::from_fen("7k/8/5K2/8/8/8/8/6R1 w - - 0 1");
+        let result = Mcts::new(&model, config, &Default::default()).search(&mut state);
+        let won = result.proven_win.map(|mv| mv.to_string());
+        assert_eq!(won.as_deref(), Some("f6f7"));
+        assert_eq!(result.best_move().map(|mv| mv.to_string()), won);
+    }
+
+    #[test]
+    fn first_play_urgency_still_finds_mate_in_one() {
+        let model = tiny_model();
+        let config = MctsConfig::new()
+            .with_n_sims(400)
+            .with_fpu_reduction(Some(0.3));
+        let mut state = State::from_fen("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1");
+        let result = Mcts::new(&model, config, &Default::default()).search(&mut state);
+        assert_eq!(
+            result.best_move().map(|mv| mv.to_string()).as_deref(),
+            Some("a1a8")
         );
     }
 
