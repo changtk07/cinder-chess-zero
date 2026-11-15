@@ -242,3 +242,35 @@ The two generation 140 networks against each other, 512 games at 50 simulations 
 - **This time the lower learning rate was clearly better.** As at generation 80, its policy loss fell a little further, its games drew less, and its value loss was higher. Yet head to head it gained as much in ten generations as 90 to 100, the best ten at 3e-4 since generation 80, and four times what 110 to 120 gained.
 - So `runs/long` continues at 1e-4, but from its own checkpoint 140, trained at 3e-4, not the copy's. The script that played the match and restarted the run only changed the learning rate, which threw away the trial's ten generations at 1e-4. Next time the winner's checkpoints should carry on.
 - By generation 177 the policy loss had fallen from 1.95 at generation 140 to 1.84, and its gap to the targets' entropy from 0.48 to 0.41.
+
+### The run at 1e-4, and 3e-5 from generation 210
+
+Each ten generations of `runs/long` against the ten before, 256 games at 50 simulations per move:
+
+| match | learning rate | wins | draws | losses | score | Elo |
+|---|---|---|---|---|---|---|
+| 130 against 120 | 3e-4 | 85 | 115 | 56 | 0.557 | +40 |
+| 140 against 130 | 3e-4 | 60 | 124 | 72 | 0.477 | −16 |
+| 150 against 140 | 1e-4 | 85 | 122 | 49 | 0.570 | +49 |
+| 160 against 150 | 1e-4 | 97 | 116 | 43 | 0.605 | +74 |
+| 170 against 160 | 1e-4 | 99 | 113 | 44 | 0.607 | +76 |
+| 180 against 170 | 1e-4 | 108 | 101 | 47 | 0.619 | +84 |
+| 190 against 180 | 1e-4 | 74 | 124 | 58 | 0.531 | +22 |
+| 200 against 190 | 1e-4 | 90 | 104 | 62 | 0.555 | +38 |
+
+The drop to 1e-4 at generation 140 brought back gains of +49–84 every ten generations, but they slowed again after 180. So at checkpoint 210 the run was split once more, into itself at 1e-4 and `runs/long-210-lr3e-5` at 3e-5, the same in everything else.
+- The split came 35 games into generation 210's self-play. Both lines finished and trained on that generation separately, so checkpoint 211 is the first that differs.
+- Both trained side by side, at about 15,000–16,500 simulations per second each. They were paused at checkpoint 211 from 2026-11-08 to 11-14.
+
+| generation | 1e-4 draws | 1e-4 policy loss | 1e-4 value loss | 3e-5 draws | 3e-5 policy loss | 3e-5 value loss |
+|---|---|---|---|---|---|---|
+| 211 | 22% | 1.894 | 0.495 | 24% | 1.901 | 0.530 |
+| 213 | 25% | 1.903 | 0.511 | 22% | 1.911 | 0.564 |
+| 215 | 20% | 1.892 | 0.495 | 24% | 1.892 | 0.562 |
+| 217 | 21% | 1.891 | 0.491 | 24% | 1.900 | 0.574 |
+| 219 | 21% | 1.885 | 0.486 | 22% | 1.908 | 0.578 |
+
+The two generation 220 networks against each other, 512 games at 50 simulations per move: 3e-5 won 127, drew 192 (none at the ply limit) and lost 193, a score of 0.436 or −45 Elo, 3.7 standard deviations from an even split in decisive games.
+
+- **Lowering the learning rate again was clearly worse.** At 3e-5 the value loss rose from 0.50 to 0.58 over the ten generations, while at 1e-4 it stayed near 0.49. The policy loss held level instead of falling. The lower rate left the value head behind as each generation's games changed, and the network lost about as much in ten generations as 1e-4 gains.
+- `runs/long` continues at 1e-4 from its own checkpoint 220. The 3e-5 line was deleted.
