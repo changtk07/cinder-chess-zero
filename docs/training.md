@@ -274,3 +274,71 @@ The two generation 220 networks against each other, 512 games at 50 simulations 
 
 - **Lowering the learning rate again was clearly worse.** At 3e-5 the value loss rose from 0.50 to 0.58 over the ten generations, while at 1e-4 it stayed near 0.49. The policy loss held level instead of falling. The lower rate left the value head behind as each generation's games changed, and the network lost about as much in ten generations as 1e-4 gains.
 - `runs/long` continues at 1e-4 from its own checkpoint 220. The 3e-5 line was deleted.
+
+### Generations 220 to 290
+
+Each ten generations against the ten before, 256 games at 50 simulations per move:
+
+| match | wins | draws | losses | score | Elo |
+|---|---|---|---|---|---|
+| 230 against 220 | 134 | 58 | 64 | 0.637 | +97 |
+| 240 against 230 | 76 | 147 | 33 | 0.584 | +59 |
+| 250 against 240 | 51 | 118 | 87 | 0.430 | −49 |
+| 260 against 250 | 80 | 131 | 45 | 0.568 | +48 |
+| 270 against 260 | 128 | 70 | 58 | 0.637 | +97 |
+| 280 against 270 | 61 | 134 | 61 | 0.500 | +0 |
+| 290 against 280 | 70 | 95 | 91 | 0.459 | −29 |
+| 290 against 220 | 125 | 66 | 65 | 0.617 | +83 |
+| 290 against 270 | 107 | 101 | 48 | 0.615 | +82 |
+
+- **The steps don't add up.** The ten-generation matches chain to about +220 Elo, but 290 scored only +83 against 220 directly, and as much against 270. Matches between a run's own networks can't say how strong it is, so the run needs a scale from outside it.
+- The run was paused at checkpoint 300 on 2026-11-15, to find out why it plays so badly.
+
+### Against Stockfish, at generation 300
+
+`scripts/stockfish-match.sh` plays a generation against Stockfish 19 over UCI with fastchess (1.8.2 alpha). Each game starts from one of the 160 balanced 8-ply openings in `scripts/openings.epd`, each opening is played with both colours, and games are played out without adjudication. Cinder searched 800 nodes a move with the batched UCI search, on the desktop's RTX 4090.
+
+- Generation 290 against Stockfish limited to 1320 Elo, the lowest rating it offers, at 60+0.6: 1 win, 1 draw and 18 losses.
+- Generation 300 against Stockfish at a fixed number of nodes a move, 10 games each: it lost every game at 1, 10, 30, 100, 300, 1,000 and 3,000 nodes. Some games were over in 17–21 plies. Stockfish at one node a move plays little more than its evaluation, which counts material, so it collects whatever Cinder leaves hanging.
+
+### The material blind spot
+
+Generation 300 barely values material:
+
+- **Value head:** taking the opponent's queen off the start position raises its value by about 70 centipawns, under a pawn, and a knight by about 16. Generation 100 valued the queen at about 24.
+- **Policy and search:** it misses free pawn-takes-knight captures for either colour, even at 3,200 nodes, though it does take a hanging queen with a knight.
+- **Not a bug:** FEN parsing, the value targets' signs, the move encoding and the batched UCI search all checked out. The older search, which evaluates one position at a time as self-play does, plays the same moves.
+
+The cause is in its own games. In generation 299's self-play:
+
+- **Material doesn't win.** A side a piece up with more than 20 pieces on the board wins 54% and loses 25%. A side 9 or more points up with 10 or fewer pieces left still draws 19%.
+- **It stopped improving.** The mean result for a side 5 or more points up rose from +0.13 at generation 1 to +0.76 at 299, but has been flat since about 200.
+- **Captures are skipped.** When a winning capture, a piece taking one worth more, is available, it's the most visited move only 51% of the time.
+- **Big leads swing back and forth.** In one game White was 23 points up with 9 pieces left from move 48 to move 89, and drew after 193 plies. In another White was 10 points up at move 19, and lost.
+- **The value head is right about these games.** Its mean in each material bucket matches the games' mean result. For example, 9 or more points up with more than 10 pieces left: the games score +0.73 and the network +0.71.
+
+So it's a loop. The games don't convert material, so the value head learns material is worth little, so the search doesn't play for it, so the games don't convert material.
+
+### Search fixes on generation 300, without training
+
+Two changes to the search, on the branch `blind-exp`:
+
+- **A mate solver.** A node is marked won once one of its moves mates or leads to a lost node, and lost once every move leads to a won node; a proven win at the root is played.
+- **First-play urgency**, as Leela does it. An untried move scores the parent's value minus 0.3 × the square root of the prior share of the moves already tried, instead of a draw.
+
+Both were measured with the batched UCI search in two tests:
+
+- **Won endgames:** 100 positions from generation 299's games, with 10 or fewer pieces left and the side to move 9 or more points up, played out against itself at 200 nodes a move.
+- **Blunders:** 400 positions with more than 10 pieces left, from generation 299's games. Stockfish at depth 12 scores the position before and after Cinder's move, capped at ±1,000 centipawns. A blunder loses 200 centipawns or more.
+
+| search | won endgames won | blunders at 200 nodes |
+|---|---|---|
+| unchanged | 75 | 18.5% |
+| mate solver | 74 | 18.5% |
+| first-play urgency | 78 | 17.2% |
+| both | 77 | 17.0% |
+
+- **Little changes.** Both together shortened the median win from 69 plies to 53. The other differences are within noise.
+- **Draws are lack of progress.** The unchanged search's 25 draws were 14 by repetition, 6 by the 50-move rule, 3 stalemates and 2 by insufficient material. Of the 13 positions the network scored under a pawn up, it drew 10.
+- **More search barely helps.** The search that evaluates one position at a time blundered 19.2% of the time at 50 nodes and 17.2% at 800. The batched search blundered 18.8% at 50 and 19.0% at 800. A deeper search still trusts the same values.
+- **The fix has to change what training sees.** Next is ten generations from checkpoint 300 with both changes in self-play, against `runs/long` itself. After that, a moves-left head, or the search's value mixed into the value target. Tablebases stay out of training, so the run still learns from the rules alone.
